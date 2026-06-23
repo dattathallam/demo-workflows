@@ -1,0 +1,49 @@
+name: Demo all action types
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test-all-actions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. JavaScript / Node.js action
+      - name: Node greeter
+        id: js
+        uses: dattathallam/gh-action-node@main
+        with:
+          name: GitHub
+          greeting: Hey
+
+      # 2. Docker container action
+      - name: Docker file inspector
+        id: docker
+        uses: dattathallam/gh-action-docker@main
+        with:
+          file-path: README.md
+
+      # 3. Go binary via Docker action
+      - name: Go word counter
+        id: go
+        uses: dattathallam/gh-action-go@main
+        with:
+          text: "Hello from a Go Docker action"
+
+      # 4. Composite action (chains checkout + node greeter internally)
+      - name: Composite greeter
+        id: composite
+        uses: dattathallam/gh-action-composite@main
+        with:
+          name: Composite World
+          greeting: Greetings
+
+      # Print all outputs to verify each action worked
+      - name: Print outputs
+        run: |
+          echo "JS output:        ${{ steps.js.outputs.message }}"
+          echo "Docker output:    ${{ steps.docker.outputs.file-info }}"
+          echo "Go output:        ${{ steps.go.outputs.word-count }} words"
+          echo "Composite output: ${{ steps.composite.outputs.message }}"
