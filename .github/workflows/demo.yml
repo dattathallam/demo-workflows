@@ -6,11 +6,71 @@ on:
 
 jobs:
   test-all-actions:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
-      # 1. JavaScript / Node.js action
+      # ── PAUSE 1 ────────────────────────────────────────────────────────────
+      # By the time any step runs, GitHub has already downloaded every action
+      # referenced by this workflow (and by composite actions too) into
+      # _work/_actions/.  This step prints what's there and sleeps so you
+      # can explore the directory in another terminal before anything executes.
+      # ───────────────────────────────────────────────────────────────────────
+      - name: "PAUSE 1 – inspect _actions/ before any action runs"
+        run: |
+          ACTIONS_DIR="$(dirname $RUNNER_WORKSPACE)/_actions"
+          echo "Runner workspace : $RUNNER_WORKSPACE"
+          echo "_actions cache   : $ACTIONS_DIR"
+          echo ""
+
+          echo "════════════════════════════════════════════════════"
+          echo "  FULL FILE TREE  (node_modules excluded)"
+          echo "════════════════════════════════════════════════════"
+          find "$ACTIONS_DIR" -not -path "*/node_modules/*" | sort
+          echo ""
+
+          echo "────────────────────────────────────────────────────"
+          echo "  [node action]  JS files – no image, just source"
+          echo "  Runner will execute index.js with node20 directly"
+          echo "────────────────────────────────────────────────────"
+          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-node/main/"
+          echo ""
+
+          echo "────────────────────────────────────────────────────"
+          echo "  [docker action]  Dockerfile + entrypoint.sh"
+          echo "  Docker image has NOT been built yet"
+          echo "────────────────────────────────────────────────────"
+          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-docker/main/"
+          echo ""
+          echo "  -- Dockerfile contents --"
+          cat "$ACTIONS_DIR/dattathallam/gh-action-docker/main/Dockerfile"
+          echo ""
+
+          echo "────────────────────────────────────────────────────"
+          echo "  [go action]  Dockerfile + .go source"
+          echo "  Docker image has NOT been built yet"
+          echo "────────────────────────────────────────────────────"
+          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-go/main/"
+          echo ""
+          echo "  -- Dockerfile contents --"
+          cat "$ACTIONS_DIR/dattathallam/gh-action-go/main/Dockerfile"
+          echo ""
+
+          echo "────────────────────────────────────────────────────"
+          echo "  [composite action]  action.yml ONLY – no binary"
+          echo "  Composite just wires other actions; nothing to build"
+          echo "────────────────────────────────────────────────────"
+          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-composite/main/"
+          echo ""
+          echo "  -- action.yml contents --"
+          cat "$ACTIONS_DIR/dattathallam/gh-action-composite/main/action.yml"
+
+          echo ""
+          echo "Sleeping 180 s — explore in another terminal:"
+          echo "  cd $ACTIONS_DIR && find . | sort"
+          sleep 180
+
+      # 1. JavaScript / Node.js action ───────────────────────────────────────
       - name: Node greeter
         id: js
         uses: dattathallam/gh-action-node@main
@@ -18,21 +78,50 @@ jobs:
           name: GitHub
           greeting: Hey
 
-      # 2. Docker container action
+      # 2. Docker container action ───────────────────────────────────────────
       - name: Docker file inspector
         id: docker
         uses: dattathallam/gh-action-docker@main
         with:
           file-path: README.md
 
-      # 3. Go binary via Docker action
+      # ── PAUSE 2 ────────────────────────────────────────────────────────────
+      # After the Docker action step the runner has built a Docker image from
+      # gh-action-docker's Dockerfile.  This pause lets you inspect that image
+      # before the Go action builds its own image.
+      # ───────────────────────────────────────────────────────────────────────
+      - name: "PAUSE 2 – inspect Docker image built by docker action"
+        run: |
+          echo "════════════════════════════════════════════════════"
+          echo "  Docker images present on runner after docker step"
+          echo "════════════════════════════════════════════════════"
+          docker images
+          echo ""
+          echo "Sleeping 60 s — run 'docker images' in another terminal"
+          sleep 60
+
+      # 3. Go binary via Docker action ───────────────────────────────────────
       - name: Go word counter
         id: go
         uses: dattathallam/gh-action-go@main
         with:
           text: "Hello from a Go Docker action"
 
-      # 4. Composite action (chains checkout + node greeter internally)
+      # ── PAUSE 3 ────────────────────────────────────────────────────────────
+      # Now both Docker images have been built (docker action + go action).
+      # Composite action runs next — it builds no image of its own.
+      # ───────────────────────────────────────────────────────────────────────
+      - name: "PAUSE 3 – inspect both Docker images (docker + go actions)"
+        run: |
+          echo "════════════════════════════════════════════════════"
+          echo "  All Docker images after node + docker + go steps"
+          echo "════════════════════════════════════════════════════"
+          docker images
+          echo ""
+          echo "Sleeping 60 s — two images visible now"
+          sleep 60
+
+      # 4. Composite action (chains checkout + node greeter internally) ───────
       - name: Composite greeter
         id: composite
         uses: dattathallam/gh-action-composite@main
@@ -40,10 +129,17 @@ jobs:
           name: Composite World
           greeting: Greetings
 
-      # Print all outputs to verify each action worked
+      # Print all outputs to verify each action worked ───────────────────────
       - name: Print outputs
         run: |
           echo "JS output:        ${{ steps.js.outputs.message }}"
           echo "Docker output:    ${{ steps.docker.outputs.file-info }}"
           echo "Go output:        ${{ steps.go.outputs.word-count }} words"
           echo "Composite output: ${{ steps.composite.outputs.message }}"
+
+      # ── NOTE ON CLEANUP ────────────────────────────────────────────────────
+      # Self-hosted runners do NOT auto-delete _actions/ or Docker images
+      # after a job. Files in _work/<repo>/ are cleaned on the NEXT checkout,
+      # but _work/_actions/ is a persistent cache — actions are re-used across
+      # runs and only re-downloaded when the @ref changes.
+      # ───────────────────────────────────────────────────────────────────────
