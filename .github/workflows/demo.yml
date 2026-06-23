@@ -66,9 +66,7 @@ jobs:
           cat "$ACTIONS_DIR/dattathallam/gh-action-composite/main/action.yml"
 
           echo ""
-          echo "Sleeping 180 s — explore in another terminal:"
-          echo "  cd $ACTIONS_DIR && find . | sort"
-          sleep 180
+          echo "Explore anytime: cd $ACTIONS_DIR && find . | sort"
 
       # 1. JavaScript / Node.js action ───────────────────────────────────────
       - name: Node greeter
@@ -97,8 +95,7 @@ jobs:
           echo "════════════════════════════════════════════════════"
           docker images
           echo ""
-          echo "Sleeping 60 s — run 'docker images' in another terminal"
-          sleep 60
+          echo "Run 'docker images' in another terminal to inspect"
 
       # 3. Go binary via Docker action ───────────────────────────────────────
       - name: Go word counter
@@ -118,8 +115,7 @@ jobs:
           echo "════════════════════════════════════════════════════"
           docker images
           echo ""
-          echo "Sleeping 60 s — two images visible now"
-          sleep 60
+          echo "Two images now visible — run 'docker images' to inspect"
 
       # 4. Composite action (chains checkout + node greeter internally) ───────
       - name: Composite greeter
