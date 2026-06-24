@@ -5,31 +5,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── GATE JOB ──────────────────────────────────────────────────────────────
-  # Runs compliance first on a Linux runner. Scans its own _actions/ and posts
-  # to the webhook. If this job fails (e.g. compliance blocks an action) the
-  # downstream jobs never start.
-  # Both downstream jobs still run their own checkout + compliance because:
-  #   1. Workspaces are not shared across jobs — checkout is always per-job.
-  #   2. _actions/ is per-job — compliance must run in the same job as the
-  #      steps it protects (so it can inspect/override before those steps run).
-  # ──────────────────────────────────────────────────────────────────────────
-  compliance:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compliance scan
-        uses: dattathallam/gh-action-compliance@main
-        with:
-          webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ── NODE + COMPOSITE (macOS self-hosted) ──────────────────────────────────
-  # Node and composite actions work on any OS.
-  # ──────────────────────────────────────────────────────────────────────────
+  # Node and composite actions work on any OS — runs on local macOS runner.
   node-and-composite:
-    needs: compliance
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +16,14 @@ jobs:
         with:
           webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Third-party OSS: softprops/action-gh-release — popular release publisher
+      # Many versions, marketplace branding. continue-on-error because no tag exists.
+      - name: GitHub Release (softprops)
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # 1. JavaScript / Node.js action
       - name: Node greeter
@@ -51,7 +36,7 @@ jobs:
       # 2. Composite action (chains checkout + node greeter internally)
       - name: Composite greeter
         id: composite
-        uses: dattathallam/gh-action-composite@main
+        uses: dattathallam/gh-action-composite@v1
         with:
           name: Composite World
           greeting: Greetings
@@ -61,12 +46,9 @@ jobs:
           echo "JS output:        ${{ steps.js.outputs.message }}"
           echo "Composite output: ${{ steps.composite.outputs.message }}"
 
-  # ── DOCKER ACTIONS (GitHub-hosted Linux) ──────────────────────────────────
   # Docker container actions, Go/Docker actions, and docker:// images all
   # require Linux — use GitHub-hosted ubuntu-latest.
-  # ──────────────────────────────────────────────────────────────────────────
   docker-actions:
-    needs: compliance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +63,11 @@ jobs:
         with:
           webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Third-party OSS: docker/setup-buildx-action — sets up Docker Buildx
+      # Many versions, marketplace branding, runs cleanly with zero config.
+      - name: Set up Docker Buildx (docker/setup-buildx-action)
+        uses: docker/setup-buildx-action@v3
 
       # 3. Docker container action
       - name: Docker file inspector
