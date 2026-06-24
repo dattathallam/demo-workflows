@@ -10,81 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── PAUSE 1 ────────────────────────────────────────────────────────────
-      # By the time any step runs, GitHub has already downloaded every action
-      # referenced by this workflow (and by composite actions too) into
-      # _work/_actions/.  This step prints what's there and sleeps so you
-      # can explore the directory in another terminal before anything executes.
-      # ───────────────────────────────────────────────────────────────────────
-      - name: "PAUSE 1 – inspect _actions/ before any action runs"
-        run: |
-          ACTIONS_DIR="$(dirname $RUNNER_WORKSPACE)/_actions"
-          echo "Runner workspace : $RUNNER_WORKSPACE"
-          echo "_actions cache   : $ACTIONS_DIR"
-          echo ""
-
-          echo "════════════════════════════════════════════════════"
-          echo "  FULL FILE TREE  (node_modules excluded)"
-          echo "════════════════════════════════════════════════════"
-          find "$ACTIONS_DIR" -not -path "*/node_modules/*" | sort
-          echo ""
-
-          echo "────────────────────────────────────────────────────"
-          echo "  [node action]  JS files – no image, just source"
-          echo "  Runner will execute index.js with node20 directly"
-          echo "────────────────────────────────────────────────────"
-          NODE_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-node/"*/ | head -1)
-          ls -lh "$NODE_DIR"
-          echo ""
-
-          echo "────────────────────────────────────────────────────"
-          echo "  [docker action]  Dockerfile + entrypoint.sh"
-          echo "  Docker image has NOT been built yet"
-          echo "────────────────────────────────────────────────────"
-          DOCKER_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-docker/"*/ | head -1)
-          ls -lh "$DOCKER_DIR"
-          echo ""
-          echo "  -- Dockerfile contents --"
-          cat "$DOCKER_DIR/Dockerfile"
-          echo ""
-
-          echo "────────────────────────────────────────────────────"
-          echo "  [go action]  Dockerfile + .go source"
-          echo "  Docker image has NOT been built yet"
-          echo "────────────────────────────────────────────────────"
-          GO_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-go/"*/ | head -1)
-          ls -lh "$GO_DIR"
-          echo ""
-          echo "  -- Dockerfile contents --"
-          cat "$GO_DIR/Dockerfile"
-          echo ""
-
-          echo "────────────────────────────────────────────────────"
-          echo "  [composite action]  action.yml ONLY – no binary"
-          echo "  Composite just wires other actions; nothing to build"
-          echo "────────────────────────────────────────────────────"
-          COMPOSITE_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-composite/"*/ | head -1)
-          ls -lh "$COMPOSITE_DIR"
-          echo ""
-          echo "  -- action.yml contents --"
-          cat "$COMPOSITE_DIR/action.yml"
-
-          echo "────────────────────────────────────────────────────"
-          echo "  [docker:// image]  NOT in _actions/ at all"
-          echo "  docker://alpine:3.19 skips _actions/ entirely"
-          echo "  Runner calls docker pull directly at step execution"
-          echo "────────────────────────────────────────────────────"
-          if [ -d "$ACTIONS_DIR/docker" ]; then
-            echo "UNEXPECTED: found something under _actions/docker/"
-            ls -lh "$ACTIONS_DIR/docker/"
-          else
-            echo "Confirmed: no entry for docker://alpine:3.19 in _actions/"
-            echo "It will be docker-pulled when that step executes"
-          fi
-
-          echo ""
-          echo "Explore anytime: cd $ACTIONS_DIR && find . | sort"
-
       # 1. JavaScript / Node.js action ───────────────────────────────────────
       - name: Node greeter
         id: js
@@ -100,39 +25,12 @@ jobs:
         with:
           file-path: README.md
 
-      # ── PAUSE 2 ────────────────────────────────────────────────────────────
-      # After the Docker action step the runner has built a Docker image from
-      # gh-action-docker's Dockerfile.  This pause lets you inspect that image
-      # before the Go action builds its own image.
-      # ───────────────────────────────────────────────────────────────────────
-      - name: "PAUSE 2 – inspect Docker image built by docker action"
-        run: |
-          echo "════════════════════════════════════════════════════"
-          echo "  Docker images present on runner after docker step"
-          echo "════════════════════════════════════════════════════"
-          docker images
-          echo ""
-          echo "Run 'docker images' in another terminal to inspect"
-
       # 3. Go binary via Docker action ───────────────────────────────────────
       - name: Go word counter
         id: go
         uses: dattathallam/gh-action-go@v1
         with:
           text: "Hello from a Go Docker action"
-
-      # ── PAUSE 3 ────────────────────────────────────────────────────────────
-      # Now both Docker images have been built (docker action + go action).
-      # Composite action runs next — it builds no image of its own.
-      # ───────────────────────────────────────────────────────────────────────
-      - name: "PAUSE 3 – inspect both Docker images (docker + go actions)"
-        run: |
-          echo "════════════════════════════════════════════════════"
-          echo "  All Docker images after node + docker + go steps"
-          echo "════════════════════════════════════════════════════"
-          docker images
-          echo ""
-          echo "Two images now visible — run 'docker images' to inspect"
 
       # 4. Composite action (chains checkout + node greeter internally) ───────
       - name: Composite greeter
@@ -151,24 +49,6 @@ jobs:
           entrypoint: /bin/sh
           args: -c "echo Hello from alpine && echo alpine_version=$(cat /etc/alpine-release)"
 
-      # ── PAUSE 4 ────────────────────────────────────────────────────────────
-      # docker://alpine:3.19 has now executed. Check that _actions/ still has
-      # NO entry for it — only docker images list shows it was pulled.
-      # ───────────────────────────────────────────────────────────────────────
-      - name: "PAUSE 4 – confirm docker:// image is NOT in _actions/"
-        run: |
-          ACTIONS_DIR="$(dirname $RUNNER_WORKSPACE)/_actions"
-          echo "════════════════════════════════════════════════════"
-          echo "  _actions/ tree AFTER docker://alpine:3.19 step"
-          echo "  (should be identical to PAUSE 1 — no new entry)"
-          echo "════════════════════════════════════════════════════"
-          find "$ACTIONS_DIR" -not -path "*/node_modules/*" | sort
-          echo ""
-          echo "════════════════════════════════════════════════════"
-          echo "  Docker images — alpine:3.19 IS here (pulled directly)"
-          echo "════════════════════════════════════════════════════"
-          docker images
-
       # Print all outputs to verify each action worked ───────────────────────
       - name: Print outputs
         run: |
@@ -177,9 +57,3 @@ jobs:
           echo "Go output:        ${{ steps.go.outputs.word-count }} words"
           echo "Composite output: ${{ steps.composite.outputs.message }}"
 
-      # ── NOTE ON CLEANUP ────────────────────────────────────────────────────
-      # Self-hosted runners do NOT auto-delete _actions/ or Docker images
-      # after a job. Files in _work/<repo>/ are cleaned on the NEXT checkout,
-      # but _work/_actions/ is a persistent cache — actions are re-used across
-      # runs and only re-downloaded when the @ref changes.
-      # ───────────────────────────────────────────────────────────────────────
