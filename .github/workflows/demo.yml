@@ -100,7 +100,7 @@ jobs:
       # 3. Go binary via Docker action ───────────────────────────────────────
       - name: Go word counter
         id: go
-        uses: dattathallam/gh-action-go@main
+        uses: dattathallam/gh-action-go@v1*
         with:
           text: "Hello from a Go Docker action"
 
