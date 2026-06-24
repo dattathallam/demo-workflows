@@ -33,37 +33,41 @@ jobs:
           echo "  [node action]  JS files – no image, just source"
           echo "  Runner will execute index.js with node20 directly"
           echo "────────────────────────────────────────────────────"
-          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-node/main/"
+          NODE_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-node/"*/ | head -1)
+          ls -lh "$NODE_DIR"
           echo ""
 
           echo "────────────────────────────────────────────────────"
           echo "  [docker action]  Dockerfile + entrypoint.sh"
           echo "  Docker image has NOT been built yet"
           echo "────────────────────────────────────────────────────"
-          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-docker/main/"
+          DOCKER_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-docker/"*/ | head -1)
+          ls -lh "$DOCKER_DIR"
           echo ""
           echo "  -- Dockerfile contents --"
-          cat "$ACTIONS_DIR/dattathallam/gh-action-docker/main/Dockerfile"
+          cat "$DOCKER_DIR/Dockerfile"
           echo ""
 
           echo "────────────────────────────────────────────────────"
           echo "  [go action]  Dockerfile + .go source"
           echo "  Docker image has NOT been built yet"
           echo "────────────────────────────────────────────────────"
-          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-go/main/"
+          GO_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-go/"*/ | head -1)
+          ls -lh "$GO_DIR"
           echo ""
           echo "  -- Dockerfile contents --"
-          cat "$ACTIONS_DIR/dattathallam/gh-action-go/main/Dockerfile"
+          cat "$GO_DIR/Dockerfile"
           echo ""
 
           echo "────────────────────────────────────────────────────"
           echo "  [composite action]  action.yml ONLY – no binary"
           echo "  Composite just wires other actions; nothing to build"
           echo "────────────────────────────────────────────────────"
-          ls -lh "$ACTIONS_DIR/dattathallam/gh-action-composite/main/"
+          COMPOSITE_DIR=$(ls -d "$ACTIONS_DIR/dattathallam/gh-action-composite/"*/ | head -1)
+          ls -lh "$COMPOSITE_DIR"
           echo ""
           echo "  -- action.yml contents --"
-          cat "$ACTIONS_DIR/dattathallam/gh-action-composite/main/action.yml"
+          cat "$COMPOSITE_DIR/action.yml"
 
           echo ""
           echo "Explore anytime: cd $ACTIONS_DIR && find . | sort"
