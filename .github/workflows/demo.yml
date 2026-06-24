@@ -71,6 +71,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: List pre-pulled Docker images on runner
+        run: |
+          echo "Images already present on this runner before any step pulls or builds:"
+          docker images
+
       - name: Compliance scan
         uses: dattathallam/gh-action-compliance@main
         with:
