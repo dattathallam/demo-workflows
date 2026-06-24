@@ -69,6 +69,19 @@ jobs:
           echo "  -- action.yml contents --"
           cat "$COMPOSITE_DIR/action.yml"
 
+          echo "────────────────────────────────────────────────────"
+          echo "  [docker:// image]  NOT in _actions/ at all"
+          echo "  docker://alpine:3.19 skips _actions/ entirely"
+          echo "  Runner calls docker pull directly at step execution"
+          echo "────────────────────────────────────────────────────"
+          if [ -d "$ACTIONS_DIR/docker" ]; then
+            echo "UNEXPECTED: found something under _actions/docker/"
+            ls -lh "$ACTIONS_DIR/docker/"
+          else
+            echo "Confirmed: no entry for docker://alpine:3.19 in _actions/"
+            echo "It will be docker-pulled when that step executes"
+          fi
+
           echo ""
           echo "Explore anytime: cd $ACTIONS_DIR && find . | sort"
 
@@ -128,6 +141,33 @@ jobs:
         with:
           name: Composite World
           greeting: Greetings
+
+      # 5. Pre-built Docker image (docker:// shorthand) ─────────────────────
+      # No action.yml, no _actions/ entry — runner calls docker pull directly.
+      - name: Pre-built Docker image (alpine)
+        id: alpine
+        uses: docker://alpine:3.19
+        with:
+          entrypoint: /bin/sh
+          args: -c "echo Hello from alpine && echo alpine_version=$(cat /etc/alpine-release)"
+
+      # ── PAUSE 4 ────────────────────────────────────────────────────────────
+      # docker://alpine:3.19 has now executed. Check that _actions/ still has
+      # NO entry for it — only docker images list shows it was pulled.
+      # ───────────────────────────────────────────────────────────────────────
+      - name: "PAUSE 4 – confirm docker:// image is NOT in _actions/"
+        run: |
+          ACTIONS_DIR="$(dirname $RUNNER_WORKSPACE)/_actions"
+          echo "════════════════════════════════════════════════════"
+          echo "  _actions/ tree AFTER docker://alpine:3.19 step"
+          echo "  (should be identical to PAUSE 1 — no new entry)"
+          echo "════════════════════════════════════════════════════"
+          find "$ACTIONS_DIR" -not -path "*/node_modules/*" | sort
+          echo ""
+          echo "════════════════════════════════════════════════════"
+          echo "  Docker images — alpine:3.19 IS here (pulled directly)"
+          echo "════════════════════════════════════════════════════"
+          docker images
 
       # Print all outputs to verify each action worked ───────────────────────
       - name: Print outputs
