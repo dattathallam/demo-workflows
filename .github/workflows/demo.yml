@@ -29,7 +29,33 @@ jobs:
           name: Composite World
           greeting: Greetings
 
-      # 3. Pre-built Docker image (docker:// shorthand)
+      - name: Print outputs
+        run: |
+          echo "JS output:        ${{ steps.js.outputs.message }}"
+          echo "Composite output: ${{ steps.composite.outputs.message }}"
+
+  # Runs on GitHub-hosted Linux — required for ALL Docker-based steps:
+  # Dockerfile actions, Go/Docker actions, and docker:// pre-built images.
+  docker-actions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3. Docker container action
+      - name: Docker file inspector
+        id: docker
+        uses: dattathallam/gh-action-docker@main
+        with:
+          file-path: README.md
+
+      # 4. Go binary via Docker action
+      - name: Go word counter
+        id: go
+        uses: dattathallam/gh-action-go@v1
+        with:
+          text: "Hello from a Go Docker action"
+
+      # 5. Pre-built Docker image (docker:// shorthand)
       # No action.yml, no _actions/ entry — runner calls docker pull directly.
       - name: Pre-built Docker image (alpine)
         id: alpine
@@ -37,31 +63,6 @@ jobs:
         with:
           entrypoint: /bin/sh
           args: -c "echo Hello from alpine && echo alpine_version=$(cat /etc/alpine-release)"
-
-      - name: Print outputs
-        run: |
-          echo "JS output:        ${{ steps.js.outputs.message }}"
-          echo "Composite output: ${{ steps.composite.outputs.message }}"
-
-  # Runs on GitHub-hosted Linux — required for Docker container actions.
-  docker-actions:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # 4. Docker container action
-      - name: Docker file inspector
-        id: docker
-        uses: dattathallam/gh-action-docker@main
-        with:
-          file-path: README.md
-
-      # 5. Go binary via Docker action
-      - name: Go word counter
-        id: go
-        uses: dattathallam/gh-action-go@v1
-        with:
-          text: "Hello from a Go Docker action"
 
       - name: Print outputs
         run: |
