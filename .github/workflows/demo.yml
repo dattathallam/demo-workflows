@@ -28,7 +28,7 @@ jobs:
       # 1. JavaScript / Node.js action
       - name: Node greeter
         id: js
-        uses: dattathallam/gh-action-node@main
+        uses: dattathallam/gh-action-node@3a04bd8638881eaf2709350b27c12727ed4ebcef
         with:
           name: GitHub
           greeting: Hey
