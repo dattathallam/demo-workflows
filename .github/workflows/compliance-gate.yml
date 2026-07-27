@@ -13,6 +13,13 @@ jobs:
   compliance:
     runs-on: self-hosted
     steps:
+      - name: Check action compliance
+        uses: dattathallam/demo-compliance-action@main
+        with:
+          mock_server_url: ${{ inputs.compliance_server_url || vars.COMPLIANCE_SERVER_URL || 'https://0ce7-167-103-78-109.ngrok-free.app'}}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          min_age_days: ${{ inputs.min_age_days || '30' }}
+          fail_on_violation: 'true'
       - name: Run compliance gate
         uses: dattathallam/gh-action-compliance-gate@main
         with:
