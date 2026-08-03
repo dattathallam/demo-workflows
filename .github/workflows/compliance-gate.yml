@@ -21,7 +21,7 @@ jobs:
           min_age_days: ${{ inputs.min_age_days || '30' }}
           fail_on_violation: 'true'
       - name: Run compliance gate
-        uses: dattathallam/gh-action-compliance-gate@main
+        uses: dattathallam/gh-test-workflows@main
         with:
           github-token: ${{ secrets.ADMIN_READ_PAT }}
           api-base-url: ${{ inputs.api-base-url }}
