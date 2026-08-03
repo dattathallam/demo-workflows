@@ -42,7 +42,7 @@ which gacpm && gacpm list actions/checkout@v4 >/dev/null && echo OK
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: dattathallam/gh-action-compliance-gate@main
+- uses: dattathallam/gh-test-workflows@main
   # with:
   #   api-base-url: https://<your-ngrok-id>.ngrok-free.app
 - uses: dattathallam/gh-action-go@v1   # runs only if the gate passed
