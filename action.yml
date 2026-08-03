@@ -145,7 +145,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         API_BASE: ${{ inputs.api-base-url }}
-        SELF_REPO: gh-test-workflows
+        SELF_REPO: demo-workflows
         SUMMARY_LEVEL: ${{ inputs.summary-level }}
       run: |
         # GitHub runs composite bash steps with errexit (-e) on. gacpm intentionally
