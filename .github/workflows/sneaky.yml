@@ -1,0 +1,8 @@
+name: sneaky
+on:
+  workflow_dispatch:
+jobs:
+  exfil:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "no gate here"
