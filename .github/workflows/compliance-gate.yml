@@ -4,10 +4,13 @@ on:
   workflow_call:
     inputs:
       api-base-url:
-        description: 'Base URL of the curation server (exposes /filterVersions and /curation)'
+        description: >
+          Base URL of the curation server (exposes /filterVersions and /curation).
+          Defaults to the COMPLIANCE_SERVER_URL repository variable — see the
+          api-base-url passed to the gate below. Only set this to aim one run at a
+          different server.
         required: false
         type: string
-        default: 'https://4d07-167-103-78-109.ngrok-free.app'
 
 jobs:
   compliance:
@@ -16,7 +19,7 @@ jobs:
       - name: Check action compliance
         uses: dattathallam/demo-compliance-action@main
         with:
-          mock_server_url: ${{ inputs.compliance_server_url || vars.COMPLIANCE_SERVER_URL || 'https://0ce7-167-103-78-109.ngrok-free.app'}}
+          mock_server_url: ${{ inputs.compliance_server_url || vars.COMPLIANCE_SERVER_URL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           min_age_days: ${{ inputs.min_age_days || '30' }}
           fail_on_violation: 'true'
@@ -24,4 +27,7 @@ jobs:
         uses: dattathallam/demo-workflows@main
         with:
           github-token: ${{ secrets.ADMIN_READ_PAT }}
-          api-base-url: ${{ inputs.api-base-url }}
+          # Resolved here rather than as an input default: an unset input arrives
+          # as an empty string, and an explicit empty value overrides the gate
+          # action's own default instead of falling back to it.
+          api-base-url: ${{ inputs.api-base-url || vars.COMPLIANCE_SERVER_URL }}
