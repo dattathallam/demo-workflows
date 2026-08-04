@@ -17,6 +17,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Check action compliance
         uses: dattathallam/demo-compliance-action@main
         with:
@@ -24,7 +25,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           min_age_days: ${{ inputs.min_age_days || '30' }}
           fail_on_violation: 'true'
-      - uses: actions/checkout@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
