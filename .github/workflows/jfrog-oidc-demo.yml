@@ -36,6 +36,18 @@ jobs:
   call-jfrog:
     runs-on: ubuntu-latest
     steps:
+      # Repo policy: the compliance gate must be the first step of every job, enforced
+      # by the required verify-compliance check. Non-blocking here because
+      # gh-action-jfrog-oidc is referenced by branch and has no version old enough to
+      # satisfy min_age_days yet — flip fail_on_violation to 'true' once it is tagged.
+      - name: Check action compliance
+        uses: dattathallam/demo-compliance-action@main
+        with:
+          mock_server_url: ${{ vars.COMPLIANCE_SERVER_URL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          min_age_days: '30'
+          fail_on_violation: 'false'
+
       - name: Mint token via OIDC and call JFrog REST API
         id: jfrog
         uses: dattathallam/gh-action-jfrog-oidc@main
