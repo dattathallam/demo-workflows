@@ -34,7 +34,7 @@ permissions:
 
 jobs:
   call-jfrog:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       # Repo policy: the compliance gate must be the first step of every job, enforced
       # by the required verify-compliance check. Non-blocking here because
