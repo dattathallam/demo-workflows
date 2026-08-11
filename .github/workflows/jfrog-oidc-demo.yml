@@ -1,0 +1,68 @@
+name: JFrog OIDC Demo
+# Mints a short-lived JFrog access token via OpenID Connect and calls the JFrog REST API with it.
+# No JFrog credential is stored in this repository — the trust is in the signed GitHub ID token
+# and the identity mapping configured on the JFrog OIDC integration.
+on:
+  workflow_dispatch:
+    inputs:
+      jfrog_url:
+        description: >
+          JFrog Platform URL, e.g. https://myinstance.jfrog.io. Leave blank to use the
+          JF_URL repository variable; set it only to aim this one run elsewhere.
+        required: false
+      oidc_provider_name:
+        description: >
+          Provider Name set on the OpenID Connect integration in the JFrog Platform.
+        required: false
+        default: 'gh-oidc'
+      oidc_audience:
+        description: >
+          Audience configured on the JFrog OIDC integration. Leave blank to use GitHub's
+          default audience, which only works if the integration was created without one.
+        required: false
+        default: 'jfrog-github'
+      api_path:
+        description: 'JFrog REST API path to call with the minted token.'
+        required: false
+        default: '/artifactory/api/system/ping'
+
+# Mandatory: without id-token write the runner never exposes ACTIONS_ID_TOKEN_REQUEST_URL
+# and the action cannot mint an ID token.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  call-jfrog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint token via OIDC and call JFrog REST API
+        id: jfrog
+        uses: dattathallam/gh-action-jfrog-oidc@main
+        with:
+          jfrog-url: ${{ inputs.jfrog_url || vars.JF_URL }}
+          oidc-provider-name: ${{ inputs.oidc_provider_name }}
+          oidc-audience: ${{ inputs.oidc_audience }}
+          api-path: ${{ inputs.api_path }}
+
+      - name: Show what came back
+        run: |
+          echo "JFrog user resolved from the token subject: ${{ steps.jfrog.outputs.oidc-user }}"
+          echo "Status: ${{ steps.jfrog.outputs.status-code }}"
+          echo "Body:   ${{ steps.jfrog.outputs.response-body }}"
+
+      # The token stays valid for the identity mapping's expires_in, so a single exchange
+      # can serve several calls. Reusing it here rather than exchanging again also keeps
+      # the Access audit log to one exchange event per run.
+      - name: Reuse the same token for a second REST call
+        env:
+          JF_URL: ${{ inputs.jfrog_url || vars.JF_URL }}
+          ACCESS_TOKEN: ${{ steps.jfrog.outputs.access-token }}
+        run: |
+          set -euo pipefail
+          echo "Listing repositories:"
+          curl -sS -o response.json -w 'HTTP %{http_code}\n' \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "$JF_URL/artifactory/api/repositories"
+          jq -r '.[]? | "\(.key)\t\(.type)\t\(.packageType // "-")"' response.json | head -20 \
+            || cat response.json
