@@ -59,6 +59,13 @@ jobs:
           command -v jf && { echo "UNEXPECTED: jf already on PATH"; exit 1; } || true
           echo "clean — no local copy of the binary exists"
           df -h / | tail -1
+          # Throughput is only meaningful alongside the machine and network path it was
+          # measured on. Hosted runners vary by region, so record it with the result.
+          echo "--- runner ---"
+          echo "image:  ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
+          echo "cpus:   $(nproc)"
+          echo "memory: $(free -h | awk '/^Mem:/{print $2}')"
+          echo "kernel: $(uname -r)"
 
       - name: Download in a loop
         id: loop
@@ -87,7 +94,10 @@ jobs:
           for i in $(seq 1 "$ITERATIONS"); do
             # Trailing newline in -w matters: without it a `read` would hit EOF and
             # return non-zero under set -e. Using command substitution here anyway.
-            out=$(curl -fsS "${cache_args[@]}" "$url" -o /tmp/jfrog-dl -D /tmp/hdr \
+            # -L is mandatory: releases.jfrog.io answers 302 and redirects to a CDN.
+            # Without it every iteration records HTTP 302 and 0 bytes, which looks like
+            # a very fast download instead of no download at all.
+            out=$(curl -fsSL "${cache_args[@]}" "$url" -o /tmp/jfrog-dl -D /tmp/hdr \
               -w '%{time_total} %{speed_download} %{size_download} %{http_code}')
             t=$(echo "$out"  | awk '{print $1}')
             sp=$(echo "$out" | awk '{print $2}')
@@ -99,6 +109,13 @@ jobs:
                   | head -1 | tr -d '\r' | cut -d' ' -f2- || true)
             age=$(grep -iE '^age:' /tmp/hdr | head -1 | tr -d '\r' | cut -d' ' -f2- || true)
             echo "$i,$t,$sp,$sz,$code,${xc:-none},${age:-none}" >> results.csv
+
+            # Fail on the first void sample rather than averaging zeros into a result
+            # that reads like a fast download. A redirect or short read is not data.
+            if [ "$code" != "200" ] || [ "$sz" -lt 1000000 ]; then
+              echo "::error::iteration $i returned HTTP $code with $sz bytes — not a real download"
+              exit 1
+            fi
 
             mbps=$(python3 -c "print(round(float('$sp')*8/1000000,1))")
             echo "[$i/$ITERATIONS] ${t}s  ${mbps} Mbps  ${sz} bytes  HTTP $code  cache=${xc:-none} age=${age:-none}"
