@@ -1,0 +1,177 @@
+# compliance-verify:exclude
+# Sequential download benchmark for the JFrog CLI binary, isolating pure network cost.
+#
+# bench-setup-jfrog-cli.yml measured the action end-to-end (mean 875 ms cold, of which
+# ~670 ms was download) but only 10 samples, each on a different runner. This one takes
+# many samples from a SINGLE runner with a sleep between them, which answers a different
+# question: is that ~550 ms stable, or was it luck of the draw on CDN edge state?
+#
+# Three separate caches could invalidate the result, so all three are addressed:
+#   1. Tool cache  — not a factor: setup-jfrog-cli is never invoked here, only curl.
+#   2. Local disk  — the output file is deleted after every iteration.
+#   3. CDN edge    — no-cache request headers are sent, AND the upstream cache headers
+#                    (x-cache / age / cf-cache-status) are recorded per iteration so a
+#                    warm edge shows up in the data instead of hiding in the average.
+# The report also compares iteration 1 against the rest; if the edge were warming, the
+# first download would be the slow outlier and the trend would be visible.
+name: Bench — download loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Number of sequential downloads.'
+        required: false
+        default: '50'
+      sleep_seconds:
+        description: 'Pause between downloads. Spreads samples over time so one transient network condition cannot dominate.'
+        required: false
+        default: '5'
+      cli_version:
+        description: 'CLI version to fetch. Default matches the setup-jfrog-cli default.'
+        required: false
+        default: '2.91.0'
+      no_cache:
+        description: 'Send Cache-Control/Pragma no-cache request headers.'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    # 50 iterations x (~0.6 s transfer + 5 s sleep) is well under this, but a slow
+    # network must fail the job rather than hang the runner for six hours.
+    timeout-minutes: 45
+    steps:
+      - name: Confirm no CLI is present, so nothing here can be served locally
+        run: |
+          set -euo pipefail
+          echo "tool cache contents:"
+          ls -la "${RUNNER_TOOL_CACHE}" || true
+          for d in "${RUNNER_TOOL_CACHE}/jf" "${RUNNER_TOOL_CACHE}/jfrog"; do
+            if [ -d "$d" ]; then echo "UNEXPECTED: $d exists"; exit 1; fi
+          done
+          command -v jf && { echo "UNEXPECTED: jf already on PATH"; exit 1; } || true
+          echo "clean — no local copy of the binary exists"
+          df -h / | tail -1
+
+      - name: Download in a loop
+        id: loop
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          SLEEP_SECONDS: ${{ inputs.sleep_seconds }}
+          CLI_VERSION: ${{ inputs.cli_version }}
+          NO_CACHE: ${{ inputs.no_cache }}
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  arch=linux-amd64 ;;
+            Linux-aarch64) arch=linux-arm64 ;;
+            *) echo "unmapped platform"; exit 1 ;;
+          esac
+          url="https://releases.jfrog.io/artifactory/jfrog-cli/v2/${CLI_VERSION}/jfrog-cli-${arch}/jfrog"
+          echo "GET $url"
+
+          cache_args=()
+          if [ "$NO_CACHE" = "true" ]; then
+            cache_args=(-H 'Cache-Control: no-cache' -H 'Pragma: no-cache')
+          fi
+
+          echo "iter,time_total_s,speed_Bps,size_bytes,http_code,x_cache,age" > results.csv
+
+          for i in $(seq 1 "$ITERATIONS"); do
+            # Trailing newline in -w matters: without it a `read` would hit EOF and
+            # return non-zero under set -e. Using command substitution here anyway.
+            out=$(curl -fsS "${cache_args[@]}" "$url" -o /tmp/jfrog-dl -D /tmp/hdr \
+              -w '%{time_total} %{speed_download} %{size_download} %{http_code}')
+            t=$(echo "$out"  | awk '{print $1}')
+            sp=$(echo "$out" | awk '{print $2}')
+            sz=$(echo "$out" | awk '{print $3}')
+            code=$(echo "$out" | awk '{print $4}')
+
+            # Any upstream cache indicator gets recorded rather than assumed absent.
+            xc=$(grep -iE '^(x-cache|cf-cache-status|x-cache-lookup):' /tmp/hdr \
+                  | head -1 | tr -d '\r' | cut -d' ' -f2- || true)
+            age=$(grep -iE '^age:' /tmp/hdr | head -1 | tr -d '\r' | cut -d' ' -f2- || true)
+            echo "$i,$t,$sp,$sz,$code,${xc:-none},${age:-none}" >> results.csv
+
+            mbps=$(python3 -c "print(round(float('$sp')*8/1000000,1))")
+            echo "[$i/$ITERATIONS] ${t}s  ${mbps} Mbps  ${sz} bytes  HTTP $code  cache=${xc:-none} age=${age:-none}"
+
+            # Delete before sleeping so no iteration can read the previous payload.
+            rm -f /tmp/jfrog-dl
+
+            if [ "$i" -lt "$ITERATIONS" ]; then sleep "$SLEEP_SECONDS"; fi
+          done
+
+          # On iteration 1 the full header set is useful for identifying the CDN.
+          echo "--- response headers (last iteration) ---"
+          cat /tmp/hdr | tr -d '\r' | head -25
+
+      - name: Report
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv, os, statistics as st
+
+          rows = list(csv.DictReader(open("results.csv")))
+          t    = [float(r["time_total_s"]) * 1000 for r in rows]
+          mbps = [float(r["speed_Bps"]) * 8 / 1_000_000 for r in rows]
+          sizes = {int(r["size_bytes"]) for r in rows}
+          codes = {r["http_code"] for r in rows}
+          caches = {r["x_cache"] for r in rows}
+          ages = {r["age"] for r in rows}
+
+          def block(label, v, unit):
+              return (f"| {label} | {min(v):.0f} {unit} | **{st.mean(v):.0f} {unit}** | "
+                      f"{st.median(v):.0f} {unit} | {max(v):.0f} {unit} | "
+                      f"{st.stdev(v):.0f} {unit} |")
+
+          out = []
+          out.append(f"## Download loop — {len(rows)} sequential samples, one runner\n")
+          out.append(f"Binary: {sorted(sizes)[0]:,} bytes · HTTP codes seen: {', '.join(sorted(codes))}\n")
+          out.append("| Metric | min | mean | median | max | stdev |")
+          out.append("|---|---:|---:|---:|---:|---:|")
+          out.append(block("Transfer time", t, "ms"))
+          out.append(block("Throughput", mbps, "Mbps"))
+          out.append("")
+
+          # Integrity: a short read or a 304 would silently deflate the average.
+          if len(sizes) == 1 and codes == {"200"}:
+              out.append(f"Every iteration transferred the full {sorted(sizes)[0]:,} bytes with HTTP 200 "
+                         "— no partial reads, no 304s inflating the result.\n")
+          else:
+              out.append(f"⚠️ Inconsistent responses — sizes {sorted(sizes)}, codes {sorted(codes)}. "
+                         "Treat the averages above as unreliable.\n")
+
+          out.append(f"Upstream cache headers observed: `{', '.join(sorted(caches))}` · "
+                     f"age: `{', '.join(sorted(ages))}`\n")
+
+          # If an edge cache were warming, iteration 1 would stand out and the rest
+          # would settle lower. Comparing them makes that visible either way.
+          if len(t) > 1:
+              first, rest = t[0], t[1:]
+              out.append(f"First iteration **{first:.0f} ms** vs remaining {len(rest)} "
+                         f"mean **{st.mean(rest):.0f} ms** "
+                         f"(delta {first - st.mean(rest):+.0f} ms).\n")
+              half = len(t) // 2
+              out.append(f"First half mean **{st.mean(t[:half]):.0f} ms** vs second half mean "
+                         f"**{st.mean(t[half:]):.0f} ms** — a large gap would indicate warming "
+                         "rather than steady state.\n")
+
+          text = "\n".join(out)
+          print(text)
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(text + "\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-loop-results
+          path: results.csv
+          retention-days: 5
