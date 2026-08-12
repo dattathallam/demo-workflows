@@ -1,0 +1,225 @@
+# compliance-verify:exclude
+# Measures what jfrog/setup-jfrog-cli actually costs per job, because the curation
+# design injects a step into EVERY job of EVERY workflow — so per-job setup cost is
+# multiplied across the whole estate, and a guess is not good enough to design around.
+#
+# The action's default CLI version downloads a 63,889,181-byte binary
+# (~64 MB / 60.9 MiB, measured against releases.jfrog.io). This workflow answers:
+#   1. Is `jf` ever pre-seeded in RUNNER_TOOL_CACHE on hosted runners, or is every job cold?
+#   2. What is the raw download time at GitHub-runner bandwidth?
+#   3. What does the action cost end-to-end cold, vs warm (tool-cache hit)?
+#
+# Deliberately credential-free: with no JF_URL/JF_ACCESS_TOKEN, configJFrogServers()
+# skips `jf c add` (it guards on `if (configArgs)`), and cleanup() bails early because
+# JFROG_CLI_SERVER_IDS is unset. So we time setup only, with no Artifactory round trips
+# and no teardown noise.
+name: Bench — setup-jfrog-cli
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'How many independent samples. Each runs as its own matrix job, so each gets a fresh runner and a cold tool cache.'
+        required: false
+        default: '10'
+      runner:
+        description: 'Runner label. Use ubuntu-latest for the hosted-bandwidth question; self-hosted to see the warm-tool-cache case.'
+        required: false
+        default: 'ubuntu-latest'
+      cli_version:
+        description: 'CLI version passed to the action. Default matches the action own default, so this measures what an unconfigured user gets.'
+        required: false
+        default: '2.91.0'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Build the sample matrix
+        id: build
+        run: |
+          set -euo pipefail
+          matrix=$(seq 1 "${{ inputs.iterations }}" | jq -R . | jq -sc .)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Sampling ${{ inputs.iterations }} runs on ${{ inputs.runner }}" >> "$GITHUB_STEP_SUMMARY"
+
+  measure:
+    needs: plan
+    runs-on: ${{ inputs.runner }}
+    strategy:
+      # One slow or failed sample must not discard the rest of the distribution.
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      # Answers question 1 before anything touches the cache. If this ever reports
+      # PRE-SEEDED on a hosted runner, the cold-download cost below is not the
+      # per-job baseline and the whole estate-wide cost argument changes.
+      - name: Probe tool cache for a pre-seeded CLI
+        id: probe
+        run: |
+          set -euo pipefail
+          state=COLD
+          if [ -d "${RUNNER_TOOL_CACHE}/jf" ] || [ -d "${RUNNER_TOOL_CACHE}/jfrog" ]; then
+            state=PRE-SEEDED
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "tool cache state: $state"
+          ls -la "${RUNNER_TOOL_CACHE}" || true
+
+      # Two adjacent no-op steps. Every timing below is bracketed by a step boundary
+      # on each side, and a boundary is not free — subtract this to get the real cost.
+      - name: Calibrate step-boundary overhead (start)
+        run: python3 -c 'import time;print(int(time.time()*1000))' > /tmp/cal_start
+      - name: Calibrate step-boundary overhead (end)
+        run: |
+          set -euo pipefail
+          echo $(( $(python3 -c 'import time;print(int(time.time()*1000))') - $(cat /tmp/cal_start) )) > /tmp/cal_ms
+          echo "boundary overhead: $(cat /tmp/cal_ms) ms"
+
+      # Answers question 2: pure transfer at this runner's bandwidth, no action involved.
+      # Uses the exact URL the action builds — getCliUrl() composes
+      # <artifactoryUrl>/<repository>/v<major>/<version>/jfrog-cli-<arch>/<execName>
+      # with defaults releases.jfrog.io/artifactory, 'jfrog-cli', and execName 'jfrog'.
+      - name: Time the raw binary download
+        id: raw
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)   arch=linux-amd64 ;;
+            Linux-aarch64)  arch=linux-arm64 ;;
+            Darwin-arm64)   arch=mac-arm64 ;;
+            Darwin-x86_64)  arch=mac-386 ;;
+            *) echo "unmapped platform $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          url="https://releases.jfrog.io/artifactory/jfrog-cli/v2/${{ inputs.cli_version }}/jfrog-cli-${arch}/jfrog"
+          echo "GET $url"
+          read -r total speed size < <(curl -fsSL "$url" -o /tmp/jfrog-raw \
+            -w '%{time_total} %{speed_download} %{size_download}')
+          echo "total_s=$total speed_Bps=$speed size_bytes=$size"
+          echo "total_ms=$(python3 -c "print(int(float('$total')*1000))")" >> "$GITHUB_OUTPUT"
+          echo "mbps=$(python3 -c "print(round(float('$speed')*8/1000000, 1))")" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=$size" >> "$GITHUB_OUTPUT"
+
+      # ── COLD: tool cache empty, so getAndAddCliToPath() must download and cache twice
+      - name: Mark cold setup start
+        run: python3 -c 'import time;print(int(time.time()*1000))' > /tmp/cold_start
+      - uses: jfrog/setup-jfrog-cli@v5
+        with:
+          version: ${{ inputs.cli_version }}
+      - name: Mark cold setup end
+        id: cold
+        run: |
+          set -euo pipefail
+          ms=$(( $(python3 -c 'import time;print(int(time.time()*1000))') - $(cat /tmp/cold_start) ))
+          echo "ms=$ms" >> "$GITHUB_OUTPUT"
+          echo "cold setup: ${ms} ms"
+
+      # ── WARM: same version, same job. toolCache.find() hits, so this is the action
+      # minus the download — env exports, PATH wiring, and the credential no-op.
+      - name: Mark warm setup start
+        run: python3 -c 'import time;print(int(time.time()*1000))' > /tmp/warm_start
+      - uses: jfrog/setup-jfrog-cli@v5
+        with:
+          version: ${{ inputs.cli_version }}
+      - name: Mark warm setup end
+        id: warm
+        run: |
+          set -euo pipefail
+          ms=$(( $(python3 -c 'import time;print(int(time.time()*1000))') - $(cat /tmp/warm_start) ))
+          echo "ms=$ms" >> "$GITHUB_OUTPUT"
+          echo "warm setup: ${ms} ms"
+
+      - name: Confirm the CLI is usable and report cache footprint
+        run: |
+          set -euo pipefail
+          jf --version
+          du -sh "${RUNNER_TOOL_CACHE}/jf" "${RUNNER_TOOL_CACHE}/jfrog" 2>/dev/null || true
+
+      - name: Emit sample
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg sample      "${{ matrix.run }}" \
+            --arg runner      "${{ inputs.runner }}" \
+            --arg version     "${{ inputs.cli_version }}" \
+            --arg cache_state "${{ steps.probe.outputs.state }}" \
+            --argjson boundary_ms "$(cat /tmp/cal_ms)" \
+            --argjson raw_ms      "${{ steps.raw.outputs.total_ms }}" \
+            --argjson raw_mbps    "${{ steps.raw.outputs.mbps }}" \
+            --argjson size_bytes  "${{ steps.raw.outputs.size_bytes }}" \
+            --argjson cold_ms     "${{ steps.cold.outputs.ms }}" \
+            --argjson warm_ms     "${{ steps.warm.outputs.ms }}" \
+            '$ARGS.named' > "sample-${{ matrix.run }}.json"
+          cat "sample-${{ matrix.run }}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timing-${{ matrix.run }}
+          path: sample-*.json
+          retention-days: 5
+
+  report:
+    needs: measure
+    # Report on whatever samples survived rather than losing the run to one bad job.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          merge-multiple: true
+          path: samples
+
+      - name: Aggregate
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, json, os, statistics
+
+          rows = [json.load(open(p)) for p in sorted(glob.glob("samples/sample-*.json"))]
+          if not rows:
+              print("no samples"); raise SystemExit(1)
+
+          def stats(key):
+              v = sorted(r[key] for r in rows)
+              return min(v), statistics.median(v), max(v)
+
+          boundary = statistics.median(r["boundary_ms"] for r in rows)
+          size_mb = rows[0]["size_bytes"] / 1_000_000
+          states = {r["cache_state"] for r in rows}
+
+          out = []
+          out.append(f"## setup-jfrog-cli cost — {len(rows)} samples on `{rows[0]['runner']}`\n")
+          out.append(f"CLI `{rows[0]['version']}` · binary {size_mb:.1f} MB "
+                     f"· tool-cache state observed: {', '.join(sorted(states))}\n")
+          out.append("| Measurement | min | median | max |")
+          out.append("|---|---:|---:|---:|")
+          for label, key in (("Raw download (curl)", "raw_ms"),
+                             ("Cold setup (action)", "cold_ms"),
+                             ("Warm setup (cache hit)", "warm_ms")):
+              lo, med, hi = stats(key)
+              out.append(f"| {label} | {lo} ms | **{med:.0f} ms** | {hi} ms |")
+          lo, med, hi = stats("raw_mbps")
+          out.append(f"| Download throughput | {lo} Mbps | **{med:.0f} Mbps** | {hi} Mbps |")
+          out.append("")
+          out.append(f"Step-boundary overhead (median): **{boundary:.0f} ms** — included in both "
+                     "setup figures above, subtract it for the action's own cost.\n")
+          cold_med = stats("cold_ms")[1]
+          warm_med = stats("warm_ms")[1]
+          out.append(f"Download attributable to cold start: **{cold_med - warm_med:.0f} ms** "
+                     f"(cold median − warm median).\n")
+          if states == {"PRE-SEEDED"}:
+              out.append("> Tool cache was pre-seeded on every sample — the cold column is not "
+                         "a true cold start, and per-job cost is lower than these numbers.\n")
+
+          text = "\n".join(out)
+          print(text)
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(text + "\n")
+          PY
