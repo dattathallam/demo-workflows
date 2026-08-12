@@ -99,8 +99,14 @@ jobs:
           esac
           url="https://releases.jfrog.io/artifactory/jfrog-cli/v2/${{ inputs.cli_version }}/jfrog-cli-${arch}/jfrog"
           echo "GET $url"
-          read -r total speed size < <(curl -fsSL "$url" -o /tmp/jfrog-raw \
+          # Command substitution, not `read` — curl's -w output has no trailing
+          # newline, so `read` returns 1 at EOF and `set -e` kills the step even
+          # though the download succeeded.
+          out=$(curl -fsSL "$url" -o /tmp/jfrog-raw \
             -w '%{time_total} %{speed_download} %{size_download}')
+          total=$(echo "$out" | awk '{print $1}')
+          speed=$(echo "$out" | awk '{print $2}')
+          size=$(echo "$out" | awk '{print $3}')
           echo "total_s=$total speed_Bps=$speed size_bytes=$size"
           echo "total_ms=$(python3 -c "print(int(float('$total')*1000))")" >> "$GITHUB_OUTPUT"
           echo "mbps=$(python3 -c "print(round(float('$speed')*8/1000000, 1))")" >> "$GITHUB_OUTPUT"
@@ -188,9 +194,9 @@ jobs:
 
           def stats(key):
               v = sorted(r[key] for r in rows)
-              return min(v), statistics.median(v), max(v)
+              return min(v), statistics.mean(v), statistics.median(v), max(v)
 
-          boundary = statistics.median(r["boundary_ms"] for r in rows)
+          boundary = statistics.mean(r["boundary_ms"] for r in rows)
           size_mb = rows[0]["size_bytes"] / 1_000_000
           states = {r["cache_state"] for r in rows}
 
@@ -198,22 +204,22 @@ jobs:
           out.append(f"## setup-jfrog-cli cost — {len(rows)} samples on `{rows[0]['runner']}`\n")
           out.append(f"CLI `{rows[0]['version']}` · binary {size_mb:.1f} MB "
                      f"· tool-cache state observed: {', '.join(sorted(states))}\n")
-          out.append("| Measurement | min | median | max |")
-          out.append("|---|---:|---:|---:|")
+          out.append("| Measurement | min | mean | median | max |")
+          out.append("|---|---:|---:|---:|---:|")
           for label, key in (("Raw download (curl)", "raw_ms"),
                              ("Cold setup (action)", "cold_ms"),
                              ("Warm setup (cache hit)", "warm_ms")):
-              lo, med, hi = stats(key)
-              out.append(f"| {label} | {lo} ms | **{med:.0f} ms** | {hi} ms |")
-          lo, med, hi = stats("raw_mbps")
-          out.append(f"| Download throughput | {lo} Mbps | **{med:.0f} Mbps** | {hi} Mbps |")
+              lo, avg, med, hi = stats(key)
+              out.append(f"| {label} | {lo} ms | **{avg:.0f} ms** | {med:.0f} ms | {hi} ms |")
+          lo, avg, med, hi = stats("raw_mbps")
+          out.append(f"| Download throughput | {lo:.0f} Mbps | **{avg:.0f} Mbps** | {med:.0f} Mbps | {hi:.0f} Mbps |")
           out.append("")
-          out.append(f"Step-boundary overhead (median): **{boundary:.0f} ms** — included in both "
+          out.append(f"Step-boundary overhead (mean): **{boundary:.0f} ms** — included in both "
                      "setup figures above, subtract it for the action's own cost.\n")
-          cold_med = stats("cold_ms")[1]
-          warm_med = stats("warm_ms")[1]
-          out.append(f"Download attributable to cold start: **{cold_med - warm_med:.0f} ms** "
-                     f"(cold median − warm median).\n")
+          cold_avg = stats("cold_ms")[1]
+          warm_avg = stats("warm_ms")[1]
+          out.append(f"Download attributable to cold start: **{cold_avg - warm_avg:.0f} ms** "
+                     f"(cold mean − warm mean).\n")
           if states == {"PRE-SEEDED"}:
               out.append("> Tool cache was pre-seeded on every sample — the cold column is not "
                          "a true cold start, and per-job cost is lower than these numbers.\n")
