@@ -14,6 +14,10 @@ name: Token Capability Probe
 
 on:
   workflow_dispatch:
+  # workflow_dispatch only fires from the default branch, so trigger on pushes
+  # to the probe branch to avoid merging a diagnostic into main.
+  push:
+    branches: [probe/token-capability]
 
 jobs:
   floor:
