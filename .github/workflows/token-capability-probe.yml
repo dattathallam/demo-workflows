@@ -1,0 +1,124 @@
+name: Token Capability Probe
+
+# Measures what the in-workflow GITHUB_TOKEN can actually see on github.com,
+# rather than assuming it.
+#
+# The job runs with `permissions: {}` — every permission stripped, the minimum
+# a workflow token can be reduced to. That makes the result a floor, not a
+# sample: if public repos resolve here, they resolve under any permissions
+# configuration, so public-vs-not detection on github.com needs no PAT. If they
+# do not resolve, the GHEC path needs a credential after all.
+#
+# No checkout: actions/checkout wants contents:read, which this job does not
+# have. The probe is inlined so the token is the only variable.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  floor:
+    name: permissions {} — the floor
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Probe token capability
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          TOKEN = os.environ["GH_TOKEN"]
+
+          # (owner, repo, ground truth) — verified out-of-band before this run.
+          TARGETS = [
+              ("dattathallam", "demo-workflows",         "public",  "this very repo"),
+              ("dattathallam", "demo-compliance-action", "public",  "own acct, other repo"),
+              ("dattathallam", "gh-action-docker",       "private", "own acct, other repo"),
+              ("actions",      "checkout",              "public",  "third party"),
+              ("docker",       "login-action",           "public",  "third party"),
+              ("github",       "github",                 "private", "foreign, control"),
+          ]
+
+          def graphql():
+              lines = ["{"]
+              for i, (o, r, _, _) in enumerate(TARGETS):
+                  lines.append(f'  r{i}: repository(owner:{json.dumps(o)}, '
+                               f'name:{json.dumps(r)}) {{ visibility }}')
+              lines.append("  rateLimit { limit cost remaining }")
+              lines.append("}")
+              req = urllib.request.Request(
+                  "https://api.github.com/graphql",
+                  data=json.dumps({"query": "\n".join(lines)}).encode(),
+                  method="POST")
+              req.add_header("Authorization", f"Bearer {TOKEN}")
+              req.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.load(resp), resp.status, None
+              except urllib.error.HTTPError as e:
+                  return None, e.code, e.read()[:400].decode("utf-8", "replace")
+
+          def rest(o, r):
+              req = urllib.request.Request(f"https://api.github.com/repos/{o}/{r}")
+              req.add_header("Authorization", f"Bearer {TOKEN}")
+              req.add_header("Accept", "application/vnd.github+json")
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      return resp.status, json.load(resp).get("visibility")
+              except urllib.error.HTTPError as e:
+                  return e.code, None
+
+          print("::group::GraphQL batch (one request, all targets)")
+          payload, status, err = graphql()
+          vis = {}
+          if payload is None:
+              print(f"  !! GraphQL REJECTED: HTTP {status}")
+              print(f"  !! body: {err}")
+              print("  !! => a workflow token CANNOT use GraphQL here; REST only.")
+          else:
+              data = payload.get("data") or {}
+              rl = data.get("rateLimit") or {}
+              print(f"  HTTP {status}  cost={rl.get('cost')} "
+                    f"limit={rl.get('limit')} remaining={rl.get('remaining')}")
+              vis = {i: (data.get(f"r{i}") or {}).get("visibility")
+                     for i in range(len(TARGETS))}
+              n_err = len(payload.get("errors") or [])
+              if n_err:
+                  print(f"  partial NOT_FOUND errors: {n_err} "
+                        f"(expected for repos this token cannot see)")
+          print("::endgroup::")
+
+          print("::group::Per-target results")
+          hdr = (f"{'target':44} {'truth':9} {'GraphQL':9} {'REST':10} "
+                 f"{'verdict':18} ok")
+          print(hdr); print("-" * len(hdr))
+          all_ok = True
+          for i, (o, r, truth, note) in enumerate(TARGETS):
+              g = vis.get(i)
+              code, rvis = rest(o, r)
+              # The rule under test: PUBLIC => in scope; anything else => out.
+              verdict = "IN SCOPE (public)" if g == "PUBLIC" else "out of scope"
+              ok = (g == "PUBLIC") == (truth == "public")
+              all_ok = all_ok and ok
+              print(f"{o+'/'+r:44} {truth:9} {str(g):9} "
+                    f"{str(code)+'/'+str(rvis):10} {verdict:18} {'OK' if ok else 'MISMATCH'}")
+              print(f"{'':44} ({note})")
+          print("::endgroup::")
+
+          n_pub_ok = sum(1 for i, t in enumerate(TARGETS)
+                         if t[2] == "public" and vis.get(i) == "PUBLIC")
+          n_pub = sum(1 for t in TARGETS if t[2] == "public")
+          n_priv_hidden = sum(1 for i, t in enumerate(TARGETS)
+                              if t[2] == "private" and vis.get(i) != "PUBLIC")
+          n_priv = sum(1 for t in TARGETS if t[2] == "private")
+
+          print(f"::notice title=Floor-token probe::"
+                f"{'ALL CORRECT' if all_ok else 'MISMATCH'} - "
+                f"public resolved {n_pub_ok}/{n_pub}, "
+                f"private correctly excluded {n_priv_hidden}/{n_priv} "
+                f"(token: permissions {{}})")
+          if not all_ok:
+              print("::error title=Verdict mismatch::The floor token did not "
+                    "classify every target correctly - see the table above.")
+          PY
