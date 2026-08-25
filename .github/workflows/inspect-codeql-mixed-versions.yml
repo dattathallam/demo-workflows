@@ -1,0 +1,45 @@
+# compliance-verify:exclude
+# Does referencing two different tags of the SAME action repo (codeql-action)
+# in one job cause two separate downloads into _work/_actions, one per ref?
+name: Inspect codeql-action mixed versions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: actions
+
+      - name: Perform CodeQL Analysis (v3)
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:actions"
+          upload: false
+          output: sarif-results
+
+      - name: Upload SARIF (v2, deliberately a different tag than analyze)
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: sarif-results
+
+      - name: Show every codeql-action ref downloaded into _actions
+        if: always()
+        run: |
+          set -x
+          ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions/github/codeql-action"
+          echo "### refs present under $ACTIONS_DIR ###"
+          find "$ACTIONS_DIR" -mindepth 1 -maxdepth 1 | sort
+          echo
+          echo "### size per ref ###"
+          find "$ACTIONS_DIR" -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \;
