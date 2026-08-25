@@ -38,27 +38,27 @@ jobs:
       - name: Inspect _work/_actions after init
         run: |
           set -x
-          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions"
           echo "### Full tree of $ACTIONS_DIR after init@v3 ###"
-          find "$ACTIONS_DIR" | sort
+          find "$ACTIONS_DIR" | sort || true
 
           echo
           echo "### Top level of the github/codeql-action checkout ###"
-          REF_DIR=$(find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d | head -1)
+          REF_DIR=$(find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
           echo "ref dir: $REF_DIR"
-          ls -la "$REF_DIR"
+          [ -n "$REF_DIR" ] && ls -la "$REF_DIR" || echo "ref dir not found"
 
           echo
           echo "### Does it carry .git metadata (full clone) or just archive contents? ###"
-          if [ -d "$REF_DIR/.git" ]; then echo ".git DIR PRESENT -> looks like a full clone"; else echo "no .git dir -> looks like a tarball/archive checkout"; fi
+          if [ -n "$REF_DIR" ] && [ -d "$REF_DIR/.git" ]; then echo ".git DIR PRESENT -> looks like a full clone"; else echo "no .git dir -> looks like a tarball/archive checkout"; fi
 
           echo
           echo "### Are sibling action dirs (init/analyze/upload-sarif/resolve-environment/etc) all present, even though only init has run so far? ###"
-          find "$REF_DIR" -mindepth 1 -maxdepth 1 -type d
+          [ -n "$REF_DIR" ] && find "$REF_DIR" -mindepth 1 -maxdepth 1 -type d || true
 
           echo
           echo "### Disk usage ###"
-          du -sh "$REF_DIR" 2>/dev/null || true
+          [ -n "$REF_DIR" ] && du -sh "$REF_DIR" 2>/dev/null || true
 
       - name: Perform CodeQL Analysis
         id: analyze
@@ -71,9 +71,9 @@ jobs:
       - name: Inspect _work/_actions after analyze
         run: |
           set -x
-          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions"
           echo "### Full tree of $ACTIONS_DIR after analyze@v3 (should be unchanged vs after-init) ###"
-          find "$ACTIONS_DIR" | sort
+          find "$ACTIONS_DIR" | sort || true
           echo
           echo "### sarif output ###"
           find sarif-results -type f 2>/dev/null || true
@@ -87,9 +87,9 @@ jobs:
         if: always()
         run: |
           set -x
-          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions"
           echo "### Final full tree of $ACTIONS_DIR ###"
-          find "$ACTIONS_DIR" | sort
+          find "$ACTIONS_DIR" | sort || true
           echo
           echo "### Per-action-ref directory sizes ###"
-          find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \;
+          find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \; 2>/dev/null || true
