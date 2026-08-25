@@ -1,0 +1,39 @@
+# compliance-verify:exclude
+# Can you tell WHICH sub-actions of a monorepo-style action (codeql-action)
+# were actually invoked, purely from what's on disk under _work/_actions?
+# This only calls init + analyze, then lists every callable sub-action
+# (every dir with its own action.yml) to show the disk view is a superset.
+name: Inspect codeql-action subpaths actually used
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: actions
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:actions"
+          upload: false
+          output: sarif-results
+
+      - name: Enumerate every callable sub-action on disk (has its own action.yml)
+        if: always()
+        run: |
+          set -x
+          REF_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions/github/codeql-action/v3"
+          echo "### every dir with an action.yml/action.yaml (i.e. every invocable sub-action) ###"
+          find "$REF_DIR" -maxdepth 2 \( -name action.yml -o -name action.yaml \) | sort
+          echo
+          echo "### workflow only referenced: init, analyze — the rest above were downloaded but never invoked ###"
