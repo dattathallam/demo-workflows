@@ -1,0 +1,95 @@
+# compliance-verify:exclude
+# One-off experiment: does github/codeql-action download the whole codeql-action
+# repo into _work/_actions, or only the subdirectory for the action being used
+# (init / analyze / upload-sarif)? This snapshots $RUNNER_WORKSPACE/_actions
+# before init, after init, and after analyze, and prints the tree plus whether
+# any .git metadata / top-level repo files (README, LICENSE, other actions'
+# folders like "upload-sarif" or "resolve-environment") show up alongside the
+# action(s) actually referenced.
+name: Inspect codeql-action _work/_actions structure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Snapshot _work before any action runs
+        run: |
+          set -x
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "RUNNER_WORKSPACE=$RUNNER_WORKSPACE"
+          find "$RUNNER_WORKSPACE" -maxdepth 2 -exec ls -ld {} \; || true
+          echo "_actions present before init?"
+          [ -d "$RUNNER_WORKSPACE/_actions" ] && find "$RUNNER_WORKSPACE/_actions" | sort || echo "no _actions dir yet"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Inspect _work/_actions after init
+        run: |
+          set -x
+          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          echo "### Full tree of $ACTIONS_DIR after init@v3 ###"
+          find "$ACTIONS_DIR" | sort
+
+          echo
+          echo "### Top level of the github/codeql-action checkout ###"
+          REF_DIR=$(find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d | head -1)
+          echo "ref dir: $REF_DIR"
+          ls -la "$REF_DIR"
+
+          echo
+          echo "### Does it carry .git metadata (full clone) or just archive contents? ###"
+          if [ -d "$REF_DIR/.git" ]; then echo ".git DIR PRESENT -> looks like a full clone"; else echo "no .git dir -> looks like a tarball/archive checkout"; fi
+
+          echo
+          echo "### Are sibling action dirs (init/analyze/upload-sarif/resolve-environment/etc) all present, even though only init has run so far? ###"
+          find "$REF_DIR" -mindepth 1 -maxdepth 1 -type d
+
+          echo
+          echo "### Disk usage ###"
+          du -sh "$REF_DIR" 2>/dev/null || true
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+          upload: false
+          output: sarif-results
+
+      - name: Inspect _work/_actions after analyze
+        run: |
+          set -x
+          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          echo "### Full tree of $ACTIONS_DIR after analyze@v3 (should be unchanged vs after-init) ###"
+          find "$ACTIONS_DIR" | sort
+          echo
+          echo "### sarif output ###"
+          find sarif-results -type f 2>/dev/null || true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif-results
+
+      - name: Inspect _work/_actions after upload-sarif (final)
+        if: always()
+        run: |
+          set -x
+          ACTIONS_DIR="$RUNNER_WORKSPACE/_actions"
+          echo "### Final full tree of $ACTIONS_DIR ###"
+          find "$ACTIONS_DIR" | sort
+          echo
+          echo "### Per-action-ref directory sizes ###"
+          find "$ACTIONS_DIR/github/codeql-action" -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \;
