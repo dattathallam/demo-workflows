@@ -1,0 +1,198 @@
+name: Curation Hook Probe (self-hosted)
+
+# Tests the ACTIONS_RUNNER_HOOK_JOB_STARTED delivery model on a PERSISTENT
+# self-hosted runner - the one environment neither earlier probe could reach.
+#
+# Why persistence is the point. The GHES scale set measured earlier is
+# ephemeral: a fresh pod per job, empty workspace, zero leftover actions. So the
+# stale-workspace and stale-cache conditions that FilterRelevant exists to
+# handle could not occur there at all. A local runner reuses its _work
+# directory across jobs, so they can - and this workflow is built to make them
+# occur on purpose, within a single run.
+#
+# HOW IT WORKS
+#
+# Two jobs, forced sequential with `needs:`, on the same runner. They declare
+# DIFFERENT actions:
+#
+#   job-a  declares actions/checkout@v4
+#   job-b  declares actions/setup-node@v4   (needs: job-a)
+#
+# The pre-job hook fires before each of them. So:
+#
+#   before job-a  -> clean-ish runner; whatever earlier runs left behind
+#   before job-b  -> job-a's checkout is in _actions as a LEFTOVER, and job-a's
+#                    checked-out repo is still in the workspace, so the hook
+#                    should report workspace_dirty=True
+#
+# That second hook invocation is the measurement that matters: it is the exact
+# condition under which reading "the workflow file" from disk reads content
+# belonging to a different job.
+#
+# Each job's own first step re-measures the same things from inside the job, so
+# one run gives four readings - hook and step, before and after a prior job.
+# Compare the hook output (in each job's "Set up job" group) with the step
+# output below it.
+#
+# SETUP - see the repo README or the accompanying instructions:
+#   1. register a self-hosted runner for this repository
+#   2. put ACTIONS_RUNNER_HOOK_JOB_STARTED=<abs path to
+#      curation-context-hook.sh> in <runner>/.env
+#   3. restart the runner, then push this branch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/runner-hook]
+
+jobs:
+  # ── First job: populates _actions and the workspace ──────────────────────────
+  job-a:
+    name: job-a (declares actions/checkout)
+    runs-on: self-hosted
+    steps:
+      - name: What the STEP sees (compare with the hook above)
+        env:
+          EXPECTED_JOB_ID: job-a
+          DECLARED_ACTIONS: actions/checkout
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, time
+
+          job       = os.environ.get("GITHUB_JOB", "")
+          ref       = os.environ.get("GITHUB_WORKFLOW_REF", "")
+          workspace = os.environ.get("GITHUB_WORKSPACE", "")
+          runner_ws = os.environ.get("RUNNER_WORKSPACE", "")
+
+          print("::group::Identity as seen by the step")
+          for k in ("GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA", "GITHUB_JOB",
+                    "GITHUB_REPOSITORY", "GITHUB_WORKSPACE", "RUNNER_WORKSPACE",
+                    "RUNNER_NAME", "GITHUB_STEP_SUMMARY", "GITHUB_TOKEN"):
+              v = os.environ.get(k)
+              print(f"  {k:22} = {v if v is not None else '<UNSET>'}")
+          print(f"  GITHUB_JOB == jobs: key = {job == os.environ['EXPECTED_JOB_ID']}")
+          print("::endgroup::")
+
+          print("::group::Workspace before this job checks out")
+          ws = pathlib.Path(workspace) if workspace else None
+          entries = sorted(p.name for p in ws.iterdir()) if ws and ws.is_dir() else []
+          wfdir = (ws / ".github" / "workflows") if ws else None
+          dirty = bool(wfdir and wfdir.is_dir())
+          print(f"  entries = {entries if entries else '<EMPTY>'}")
+          print(f"  .github/workflows present = {dirty}")
+          if dirty:
+              print("  => DIRTY: left by an earlier job on this persistent runner.")
+              print(f"     files: {sorted(p.name for p in wfdir.iterdir())}")
+          print("::endgroup::")
+
+          print("::group::_actions: this job's vs leftovers")
+          actions_dir = pathlib.Path(runner_ws, "..", "_actions").resolve() if runner_ws else None
+          declared = {a.strip() for a in os.environ["DECLARED_ACTIONS"].split(",") if a.strip()}
+          rows, leftovers = [], 0
+          if actions_dir and actions_dir.is_dir():
+              for owner in sorted(actions_dir.iterdir()):
+                  if not owner.is_dir():
+                      continue
+                  for repo in sorted(owner.iterdir()):
+                      if not repo.is_dir():
+                          continue
+                      for r in sorted(repo.iterdir()):
+                          if not r.is_dir():
+                              continue
+                          name = f"{owner.name}/{repo.name}"
+                          own = name in declared
+                          leftovers += 0 if own else 1
+                          age = time.time() - r.stat().st_mtime
+                          rows.append((name, r.name,
+                                       f"{age/60:.1f}m" if age < 3600 else f"{age/3600:.1f}h",
+                                       "this job" if own else "LEFTOVER"))
+          print(f"  _actions = {actions_dir}")
+          for n, r, a, o in rows:
+              print(f"    {n:42} {r:20} {a:>8}  {o}")
+          if not rows:
+              print("    <none>")
+          print(f"  total={len(rows)} leftovers={leftovers}")
+          print("::endgroup::")
+
+          print(f"::notice title=job-a step::workspace_dirty={dirty}, "
+                f"cache={len(rows)}, leftovers={leftovers}, "
+                f"workflow_on_disk={bool(ws and (ws / '.github/workflows').is_dir())}")
+          PY
+
+      # Runs after the probe, and leaves a checkout behind for job-b's hook.
+      - name: (populates the workspace for job-b's hook to find)
+        uses: actions/checkout@v4
+
+  # ── Second job: its hook should see job-a's residue ──────────────────────────
+  job-b:
+    name: job-b (declares actions/setup-node, needs job-a)
+    needs: job-a
+    runs-on: self-hosted
+    steps:
+      - name: What the STEP sees after a previous job ran here
+        env:
+          EXPECTED_JOB_ID: job-b
+          # Deliberately NOT actions/checkout - so job-a's checkout shows up as
+          # a leftover, which is the whole point of this second job.
+          DECLARED_ACTIONS: actions/setup-node
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, time
+
+          job       = os.environ.get("GITHUB_JOB", "")
+          workspace = os.environ.get("GITHUB_WORKSPACE", "")
+          runner_ws = os.environ.get("RUNNER_WORKSPACE", "")
+
+          ws = pathlib.Path(workspace) if workspace else None
+          wfdir = (ws / ".github" / "workflows") if ws else None
+          dirty = bool(wfdir and wfdir.is_dir())
+
+          print("::group::Workspace at job-b's first step")
+          print(f"  GITHUB_JOB = {job} (is jobs: key: {job == os.environ['EXPECTED_JOB_ID']})")
+          print(f"  .github/workflows present = {dirty}")
+          if dirty:
+              print("  => job-a's checkout survived into job-b. Reading 'the workflow "
+                    "file' from disk here reads content this job did not put there.")
+              print(f"     files: {sorted(p.name for p in wfdir.iterdir())}")
+          else:
+              print("  => the runner cleaned the workspace between jobs.")
+          print("::endgroup::")
+
+          print("::group::_actions: leftovers from job-a")
+          actions_dir = pathlib.Path(runner_ws, "..", "_actions").resolve() if runner_ws else None
+          declared = {a.strip() for a in os.environ["DECLARED_ACTIONS"].split(",") if a.strip()}
+          rows, leftovers = [], 0
+          if actions_dir and actions_dir.is_dir():
+              for owner in sorted(actions_dir.iterdir()):
+                  if not owner.is_dir():
+                      continue
+                  for repo in sorted(owner.iterdir()):
+                      if not repo.is_dir():
+                          continue
+                      for r in sorted(repo.iterdir()):
+                          if not r.is_dir():
+                              continue
+                          name = f"{owner.name}/{repo.name}"
+                          own = name in declared
+                          leftovers += 0 if own else 1
+                          age = time.time() - r.stat().st_mtime
+                          rows.append((name, r.name,
+                                       f"{age/60:.1f}m" if age < 3600 else f"{age/3600:.1f}h",
+                                       "this job" if own else "LEFTOVER"))
+          for n, r, a, o in rows:
+              print(f"    {n:42} {r:20} {a:>8}  {o}")
+          if not rows:
+              print("    <none>")
+          print(f"  total={len(rows)} leftovers={leftovers}")
+          if leftovers:
+              print(f"  => curating the whole cache here would decide {leftovers} action(s) "
+                    f"this job never resolved.")
+          print("::endgroup::")
+
+          print(f"::notice title=job-b step::workspace_dirty={dirty}, "
+                f"cache={len(rows)}, leftovers={leftovers}")
+          PY
+
+      - name: (never executes - only needs to be resolved at setup)
+        if: false
+        uses: actions/setup-node@v4
