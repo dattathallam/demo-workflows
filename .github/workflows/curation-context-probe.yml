@@ -1,0 +1,330 @@
+name: Curation Context Probe
+
+# Measures what `jf curate-gh-actions` can actually see at the moment it runs,
+# rather than assuming it.
+#
+# jfrog/setup-jfrog-cli invokes curation as the FIRST step of a job, so curation
+# executes before actions/checkout. The CLI's cross-referencing step needs the
+# job's workflow YAML to decide which cached actions belong to this job. Two
+# things therefore have to be true, and neither is currently verified:
+#
+#   1. the workflow YAML is reachable at first-step time, and
+#   2. the runner has already populated _work/_actions by then.
+#
+# (2) is documented behaviour (JobExtension.InitializeJob awaits
+# PrepareActionsAsync before any step). (1) is the open one: actions/checkout is
+# what puts .github/workflows on disk, and it has not run yet.
+#
+# Every probe below prints an explicit PREDICTION next to the MEASUREMENT, so a
+# run is self-interpreting and a surprise is visible rather than buried.
+#
+# The probe step is FIRST in every job and no job checks out the repo before it.
+# The trailing `uses:` steps exist only so the runner resolves them during setup
+# - which is precisely what the probe asserts. They are continue-on-error or
+# `if: false` so their outcome never masks the probe's.
+
+on:
+  workflow_dispatch:
+  # workflow_dispatch only fires from the default branch, so trigger on pushes
+  # to the probe branch to avoid merging a diagnostic into main.
+  push:
+    branches: [probe/curation-context]
+
+jobs:
+  # ── The floor: permissions {} and no checkout ────────────────────────────────
+  # The job id is `first-step-floor`; `name:` below is deliberately different, so
+  # the run proves whether GITHUB_JOB carries the id or the display name. The CLI
+  # scopes curation by looking GITHUB_JOB up as a key in the YAML's `jobs:` map,
+  # so if it carried the name that lookup silently misses and curation widens to
+  # every job in the file.
+  first-step-floor:
+    name: A display name that is NOT the job id
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        # A matrix is included because it is the other case where GITHUB_JOB
+        # could plausibly be decorated (`build (one)`) rather than the bare id.
+        variant: [one, two]
+    steps:
+      - name: Probe curation context
+        env:
+          # GITHUB_TOKEN is NOT injected into a step's environment automatically;
+          # `github.token` has to be passed explicitly like this. The probe also
+          # checks for a bare GITHUB_TOKEN to confirm that - it matters because a
+          # pre-job hook gets no interpolation pass and so can never receive one.
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_JOB_ID: first-step-floor
+          MATRIX_VARIANT: ${{ matrix.variant }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, urllib.error, urllib.request
+
+          results = []   # (label, prediction, measurement, ok)
+
+          def record(label, prediction, measurement, ok):
+              results.append((label, prediction, measurement, ok))
+
+          # ── A3: which environment variables actually exist ──────────────────
+          print("::group::A3 - environment the CLI can read")
+          INTERESTING = [
+              "GITHUB_WORKFLOW", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
+              "GITHUB_JOB", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF",
+              "GITHUB_WORKSPACE", "RUNNER_WORKSPACE", "GITHUB_ACTION_PATH",
+              "GITHUB_STEP_SUMMARY", "GITHUB_TOKEN",
+          ]
+          for k in INTERESTING:
+              v = os.environ.get(k)
+              print(f"  {k:22} = {v if v is not None else '<UNSET>'}")
+          print("::endgroup::")
+
+          workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF", "")
+          workflow_sha = os.environ.get("GITHUB_WORKFLOW_SHA", "")
+          job          = os.environ.get("GITHUB_JOB", "")
+          workspace    = os.environ.get("GITHUB_WORKSPACE", "")
+          runner_ws    = os.environ.get("RUNNER_WORKSPACE", "")
+
+          record("GITHUB_WORKFLOW_REF is set", "set", workflow_ref or "<UNSET>",
+                 bool(workflow_ref))
+          record("GITHUB_WORKFLOW_SHA is set", "set", workflow_sha or "<UNSET>",
+                 bool(workflow_sha))
+          record("bare GITHUB_TOKEN in step env", "UNSET (needs explicit env:)",
+                 os.environ.get("GITHUB_TOKEN") and "set" or "<UNSET>",
+                 os.environ.get("GITHUB_TOKEN") is None)
+
+          # ── A5: is GITHUB_JOB the `jobs:` key, or the display name? ─────────
+          expected_job = os.environ["EXPECTED_JOB_ID"]
+          record("GITHUB_JOB == jobs: map key", expected_job, job,
+                 job == expected_job)
+          print(f"  (matrix variant = {os.environ.get('MATRIX_VARIANT')}; "
+                f"GITHUB_JOB is {'undecorated' if job == expected_job else 'DECORATED'})")
+
+          # ── A1: is the workflow YAML on disk before checkout? ───────────────
+          print("::group::A1 - is the workflow YAML on disk at first-step time?")
+          wf_path = ""
+          if workflow_ref:
+              # "<owner>/<repo>/<path>@<ref>" - the ref itself may contain "/".
+              head = workflow_ref.rsplit("@", 1)[0]
+              parts = head.split("/", 2)
+              wf_path = parts[2] if len(parts) == 3 else ""
+          print(f"  path from GITHUB_WORKFLOW_REF = {wf_path or '<could not derive>'}")
+
+          ws = pathlib.Path(workspace) if workspace else None
+          ws_entries = sorted(p.name for p in ws.iterdir()) if ws and ws.is_dir() else []
+          print(f"  GITHUB_WORKSPACE exists = {bool(ws and ws.is_dir())}")
+          print(f"  GITHUB_WORKSPACE entries = {ws_entries if ws_entries else '<EMPTY>'}")
+
+          on_disk = bool(wf_path) and (ws / wf_path).is_file() if ws else False
+          wfdir = (ws / ".github" / "workflows") if ws else None
+          wfdir_exists = bool(wfdir and wfdir.is_dir())
+          print(f"  .github/workflows/ exists = {wfdir_exists}")
+          print(f"  the running workflow file on disk = {on_disk}")
+          print("::endgroup::")
+
+          record("workflow YAML readable from disk",
+                 "NO (checkout has not run)",
+                 "yes" if on_disk else "no", not on_disk)
+          record(".github/workflows/ on disk",
+                 "NO (checkout has not run)",
+                 "yes" if wfdir_exists else "no", not wfdir_exists)
+
+          # ── A2: is _work/_actions already populated? ────────────────────────
+          # Derived exactly as the CLI derives it: dirname(RUNNER_WORKSPACE)/_actions.
+          print("::group::A2 - _actions cache at first-step time")
+          actions_dir = pathlib.Path(runner_ws, "..", "_actions").resolve() if runner_ws else None
+          print(f"  derived _actions = {actions_dir}")
+          found = []
+          if actions_dir and actions_dir.is_dir():
+              for owner in sorted(actions_dir.iterdir()):
+                  if not owner.is_dir():
+                      print(f"  (non-dir at owner level: {owner.name})")
+                      continue
+                  for repo in sorted(owner.iterdir()):
+                      if not repo.is_dir():
+                          continue
+                      for ref in sorted(repo.iterdir()):
+                          if ref.is_dir():
+                              found.append(f"{owner.name}/{repo.name}@{ref.name}")
+          for f in found:
+              print(f"    {f}")
+          if not found:
+              print("    <none>")
+          print("::endgroup::")
+
+          record("_actions dir exists", "yes",
+                 "yes" if (actions_dir and actions_dir.is_dir()) else "no",
+                 bool(actions_dir and actions_dir.is_dir()))
+
+          def has(prefix):
+              return any(f.startswith(prefix) for f in found)
+
+          # Downloaded during setup even though its step runs LATER.
+          record("actions/checkout present (step is later)", "yes",
+                 "yes" if has("actions/checkout@") else "no", has("actions/checkout@"))
+          # Gated behind `if: false` - never executes. Still resolved at setup?
+          record("gh-action-composite present (step is `if: false`)", "yes",
+                 "yes" if has("dattathallam/gh-action-composite@") else "no",
+                 has("dattathallam/gh-action-composite@"))
+          # Only reachable through the composite action's own action.yml.
+          record("gh-action-node present (transitive only)", "yes",
+                 "yes" if has("dattathallam/gh-action-node@") else "no",
+                 has("dattathallam/gh-action-node@"))
+          # The delivery action is excluded from curation, but it IS on disk.
+          record("setup-jfrog-cli would appear in the cache",
+                 "n/a (not used by this probe job)",
+                 "yes" if has("jfrog/setup-jfrog-cli@") else "no", True)
+
+          # ── A4: can the job token fetch the workflow YAML from the API? ─────
+          # This is the decisive one for the workflow-step delivery model: if the
+          # YAML is not on disk, the API is the only other source.
+          print("::group::A4 - fetch the workflow YAML over the API")
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          token = os.environ.get("GH_TOKEN", "")
+          repo_full = os.environ.get("GITHUB_REPOSITORY", "")
+          ok_api = False
+          detail = "not attempted"
+          if token and repo_full and wf_path:
+              ref = workflow_sha or os.environ.get("GITHUB_SHA", "")
+              url = f"{api}/repos/{repo_full}/contents/{wf_path}?ref={ref}"
+              print(f"  GET {url}")
+              req = urllib.request.Request(url)
+              req.add_header("Authorization", f"Bearer {token}")
+              req.add_header("Accept", "application/vnd.github.raw")
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      body = resp.read().decode("utf-8", "replace")
+                      ok_api = resp.status == 200 and "jobs:" in body
+                      detail = f"HTTP {resp.status}, {len(body)} bytes, jobs: present={'jobs:' in body}"
+                      print(f"  {detail}")
+                      print(f"  first line: {body.splitlines()[0] if body else '<empty>'}")
+              except urllib.error.HTTPError as e:
+                  detail = f"HTTP {e.code}: {e.read()[:300].decode('utf-8','replace')}"
+                  print(f"  REJECTED {detail}")
+              except Exception as e:  # noqa: BLE001 - diagnostic breadth is the point
+                  detail = f"{type(e).__name__}: {e}"
+                  print(f"  FAILED {detail}")
+          else:
+              print(f"  skipped (token={bool(token)} repo={bool(repo_full)} path={bool(wf_path)})")
+          print("::endgroup::")
+
+          # Prediction: with permissions {} this is REJECTED, so the workflow-step
+          # model needs contents:read in the caller's job. The paired job below
+          # runs the same request with contents:read to isolate that.
+          record("API fetch of workflow YAML (permissions {})",
+                 "rejected without contents:read", detail, True)
+
+          # ── verdict table ──────────────────────────────────────────────────
+          print("::group::Verdict - prediction vs measurement")
+          hdr = f"{'check':48} {'predicted':32} {'measured':34} ok"
+          print(hdr); print("-" * len(hdr))
+          mismatches = 0
+          for label, pred, meas, ok in results:
+              if not ok:
+                  mismatches += 1
+              print(f"{label:48} {str(pred):32} {str(meas)[:34]:34} "
+                    f"{'OK' if ok else 'MISMATCH'}")
+          print("::endgroup::")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(f"### Curation context probe - `{job}` "
+                           f"(variant {os.environ.get('MATRIX_VARIANT')})\n\n")
+                  fh.write("| check | predicted | measured | ok |\n|---|---|---|---|\n")
+                  for label, pred, meas, ok in results:
+                      fh.write(f"| {label} | {pred} | `{meas}` | "
+                               f"{'OK' if ok else '**MISMATCH**'} |\n")
+                  fh.write(f"\n`GITHUB_WORKFLOW_REF` = `{workflow_ref}`\n")
+                  fh.write(f"\nActions on disk before any step ran: "
+                           f"{len(found)}\n")
+
+          print(f"::notice title=Curation context probe::"
+                f"{'ALL AS PREDICTED' if not mismatches else str(mismatches) + ' MISMATCH(ES)'} - "
+                f"workflow YAML on disk={on_disk}, actions cached={len(found)}, "
+                f"GITHUB_JOB={job!r}")
+          if mismatches:
+              print("::error title=Probe mismatch::A measurement contradicted its "
+                    "prediction - see the verdict table above.")
+          PY
+
+      # ── everything below exists only to be RESOLVED at setup ────────────────
+      # continue-on-error: checkout needs contents:read, which permissions {}
+      # denies. Its failure is expected and must not mask the probe's result.
+      - name: (resolved at setup, runs after the probe)
+        continue-on-error: true
+        uses: actions/checkout@v4
+
+      # Never executes. If the probe still finds it - and gh-action-node, which
+      # is reachable only through this action's own action.yml - then action
+      # resolution ignores `if:` entirely, and curation will therefore see
+      # actions that the job never runs.
+      - name: (never executes - tests whether `if:` gates resolution)
+        if: false
+        uses: dattathallam/gh-action-composite@v1
+        with:
+          name: probe
+
+  # ── Same API fetch, but with contents:read ──────────────────────────────────
+  # Isolates one variable against the floor job: if this succeeds and the floor
+  # job's fetch is rejected, then the workflow-step delivery model cannot read
+  # the YAML from a job that declares `permissions: {}` - which is exactly what
+  # a security-conscious caller declares.
+  with-contents-read:
+    name: API fetch with contents read
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the running workflow YAML over the API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import os, urllib.error, urllib.request
+
+          ref_env = os.environ.get("GITHUB_WORKFLOW_REF", "")
+          head = ref_env.rsplit("@", 1)[0]
+          parts = head.split("/", 2)
+          wf_path = parts[2] if len(parts) == 3 else ""
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          url = (f"{api}/repos/{os.environ['GITHUB_REPOSITORY']}/contents/{wf_path}"
+                 f"?ref={os.environ.get('GITHUB_WORKFLOW_SHA') or os.environ['GITHUB_SHA']}")
+
+          print(f"GITHUB_WORKFLOW_REF = {ref_env}")
+          print(f"derived path        = {wf_path}")
+          print(f"GET {url}")
+
+          req = urllib.request.Request(url)
+          req.add_header("Authorization", f"Bearer {os.environ['GH_TOKEN']}")
+          req.add_header("Accept", "application/vnd.github.raw")
+          try:
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  body = resp.read().decode("utf-8", "replace")
+              print(f"HTTP {resp.status}, {len(body)} bytes")
+              # The point of the probe: is this the file the CLI would need to
+              # cross-reference, and does it contain the job we are running?
+              has_jobs = "jobs:" in body
+              has_self = os.environ["GITHUB_JOB"] in body
+              print(f"contains 'jobs:'          = {has_jobs}")
+              print(f"contains GITHUB_JOB key   = {has_self} "
+                    f"({os.environ['GITHUB_JOB']!r})")
+              verdict = "USABLE" if (has_jobs and has_self) else "FETCHED BUT UNUSABLE"
+              print(f"::notice title=contents:read fetch::{verdict} - "
+                    f"HTTP {resp.status}, jobs:={has_jobs}, job key present={has_self}")
+          except urllib.error.HTTPError as e:
+              print(f"REJECTED HTTP {e.code}: "
+                    f"{e.read()[:300].decode('utf-8','replace')}")
+              print(f"::error title=contents:read fetch::REJECTED with HTTP {e.code} "
+                    f"- the API is not a usable source for the workflow YAML either.")
+          PY
+
+  # ── A6: what does a CALLED reusable workflow see? ───────────────────────────
+  # The PR documents that a called reusable workflow's actions are out of scope
+  # because its jobs run on their own runners with their own _actions cache.
+  # This proves or disproves that, and shows what GITHUB_WORKFLOW_REF/GITHUB_JOB
+  # are inside the callee - which decides whether job-scoping works there.
+  call-reusable:
+    name: caller
+    uses: ./.github/workflows/curation-context-reusable.yml
+    permissions: {}

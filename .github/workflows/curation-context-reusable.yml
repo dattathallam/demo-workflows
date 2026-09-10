@@ -1,0 +1,124 @@
+name: Curation Context Probe (reusable callee)
+
+# Called by curation-context-probe.yml. Answers the reusable-workflow half of
+# the question: when a job comes from a CALLED workflow, what does curation see?
+#
+# Three things are being established:
+#
+#   1. Does this job's _actions cache contain the CALLER's actions, or only the
+#      ones this file declares? The PR asserts the latter - a called workflow's
+#      jobs are separate jobs on their own runners - and treats caller-side
+#      actions as out of scope by construction rather than as a coverage gap.
+#
+#   2. What is GITHUB_WORKFLOW_REF here - this file, or the caller's? If it is
+#      the caller's, then deriving the workflow file from it inside a called
+#      workflow points curation at the wrong file.
+#
+#   3. Is GITHUB_JOB a key in THIS file or in the caller's? The CLI looks
+#      GITHUB_JOB up in whichever YAML it read; a mismatch between (2) and (3)
+#      is precisely the case where job-scoping silently widens to every job.
+#
+# This job deliberately declares an action the CALLER does not use
+# (actions/setup-node) and does NOT declare one the caller does
+# (dattathallam/gh-action-composite), so the two caches are distinguishable.
+
+on:
+  workflow_call:
+
+jobs:
+  callee-probe:
+    name: inside the called workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe the callee's context
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+
+          ref  = os.environ.get("GITHUB_WORKFLOW_REF", "<UNSET>")
+          job  = os.environ.get("GITHUB_JOB", "<UNSET>")
+          name = os.environ.get("GITHUB_WORKFLOW", "<UNSET>")
+          runner_ws = os.environ.get("RUNNER_WORKSPACE", "")
+
+          print("::group::Callee identity")
+          print(f"  GITHUB_WORKFLOW      = {name}")
+          print(f"  GITHUB_WORKFLOW_REF  = {ref}")
+          print(f"  GITHUB_JOB           = {job}")
+          print("::endgroup::")
+
+          # Which file does GITHUB_WORKFLOW_REF name?
+          head = ref.rsplit("@", 1)[0]
+          parts = head.split("/", 2)
+          wf_path = parts[2] if len(parts) == 3 else ""
+          points_at_callee = wf_path.endswith("curation-context-reusable.yml")
+          points_at_caller = wf_path.endswith("curation-context-probe.yml")
+          print(f"  derived path         = {wf_path or '<could not derive>'}")
+          print(f"  -> names the CALLEE  = {points_at_callee}")
+          print(f"  -> names the CALLER  = {points_at_caller}")
+
+          # GITHUB_JOB should be this file's job id, while GITHUB_WORKFLOW_REF
+          # (per GitHub's docs) names the caller. If both hold, a CLI that reads
+          # the file named by WORKFLOW_REF and looks up GITHUB_JOB in it finds
+          # nothing - the widen-to-all-jobs fallback.
+          job_is_callee_key = job == "callee-probe"
+          print(f"  GITHUB_JOB is this file's job id = {job_is_callee_key}")
+          if points_at_caller and job_is_callee_key:
+              print("  => WORKFLOW_REF names the caller but JOB names the callee: "
+                    "looking GITHUB_JOB up in the WORKFLOW_REF file MISSES.")
+
+          print("::group::Callee's _actions cache")
+          actions_dir = pathlib.Path(runner_ws, "..", "_actions").resolve() if runner_ws else None
+          found = []
+          if actions_dir and actions_dir.is_dir():
+              for owner in sorted(actions_dir.iterdir()):
+                  if not owner.is_dir():
+                      continue
+                  for repo in sorted(owner.iterdir()):
+                      if not repo.is_dir():
+                          continue
+                      for r in sorted(repo.iterdir()):
+                          if r.is_dir():
+                              found.append(f"{owner.name}/{repo.name}@{r.name}")
+          for f in found:
+              print(f"    {f}")
+          if not found:
+              print("    <none>")
+          print("::endgroup::")
+
+          # setup-node is declared HERE only; gh-action-composite in the CALLER only.
+          has_own    = any(f.startswith("actions/setup-node@") for f in found)
+          has_caller = any(f.startswith("dattathallam/gh-action-composite@") for f in found)
+
+          print("::group::Verdict")
+          print(f"  this file's own action (actions/setup-node) present = {has_own}")
+          print(f"  caller-only action (gh-action-composite) present    = {has_caller}")
+          if has_own and not has_caller:
+              print("  => CONFIRMED: separate cache. The caller's actions are not here, "
+                    "so they are out of this invocation's scope by construction.")
+          elif has_caller:
+              print("  => CONTRADICTED: the caller's actions ARE in this cache. "
+                    "The PR's reusable-workflow reasoning needs revisiting.")
+          print("::endgroup::")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(f"### Reusable callee - `{job}`\n\n")
+                  fh.write(f"- `GITHUB_WORKFLOW_REF` = `{ref}`\n")
+                  fh.write(f"- names callee / caller = `{points_at_callee}` / `{points_at_caller}`\n")
+                  fh.write(f"- `GITHUB_JOB` = `{job}` (this file's id: `{job_is_callee_key}`)\n")
+                  fh.write(f"- own action present = `{has_own}`; "
+                           f"caller-only action present = `{has_caller}`\n")
+                  fh.write(f"- actions in cache = {len(found)}\n")
+
+          print(f"::notice title=Reusable callee::separate_cache="
+                f"{has_own and not has_caller}, workflow_ref_names="
+                f"{'callee' if points_at_callee else 'caller' if points_at_caller else 'unknown'}, "
+                f"GITHUB_JOB={job!r}")
+          PY
+
+      # Declared here and nowhere in the caller, so its presence identifies
+      # whose cache this is. Never executes.
+      - name: (never executes - identifies this cache as the callee's)
+        if: false
+        uses: actions/setup-node@v4
