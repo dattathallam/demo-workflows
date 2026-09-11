@@ -1,0 +1,11 @@
+name: pr-probe-local-action
+description: Local composite action. The BASE version references setup-node.
+runs:
+  using: composite
+  steps:
+    - name: BASE-VERSION marker
+      shell: bash
+      run: echo "LOCAL ACTION VERSION = BASE"
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'

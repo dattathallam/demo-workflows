@@ -1,0 +1,33 @@
+name: pr-semantics-pull_request
+# WORKFLOW-VERSION = BASE
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: identity and resolution
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== identity ==="
+          echo "GITHUB_EVENT_NAME   = $GITHUB_EVENT_NAME"
+          echo "GITHUB_REF          = $GITHUB_REF"
+          echo "GITHUB_SHA          = $GITHUB_SHA"
+          echo "GITHUB_WORKFLOW_REF = $GITHUB_WORKFLOW_REF"
+          echo "GITHUB_BASE_REF     = $GITHUB_BASE_REF"
+          echo "GITHUB_HEAD_REF     = $GITHUB_HEAD_REF"
+          echo "base sha (event)    = $(jq -r .pull_request.base.sha "$GITHUB_EVENT_PATH")"
+          echo "head sha (event)    = $(jq -r .pull_request.head.sha "$GITHUB_EVENT_PATH")"
+          echo "=== _actions pre-resolved at job start ==="
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | grep -v '\.completed' | sort
+          echo "=== which version of the LOCAL action does GITHUB_SHA see? ==="
+          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/.github/actions/prprobe/action.yml?ref=$GITHUB_SHA" \
+            | grep -E 'VERSION =|uses:' || echo "  (fetch failed)"
+          echo "=== which version of THIS WORKFLOW does GITHUB_SHA see? ==="
+          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$(echo "$GITHUB_WORKFLOW_REF" | sed "s|^$GITHUB_REPOSITORY/||; s|@.*||")?ref=$GITHUB_SHA" \
+            | grep -E 'WORKFLOW-VERSION' || echo "  (no marker found)"
+      - uses: ./.github/actions/prprobe
