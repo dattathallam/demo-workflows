@@ -2,6 +2,8 @@ name: probe-local-composite
 
 on:
   workflow_dispatch:
+  push:
+    branches: [probe/local-composite]
 
 jobs:
   local-composite:
