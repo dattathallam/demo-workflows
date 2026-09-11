@@ -1,0 +1,9 @@
+name: local-composite-inner
+description: Nested local composite action, reached only via another local composite.
+runs:
+  using: composite
+  steps:
+    - name: third-party action two local hops from the workflow
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'

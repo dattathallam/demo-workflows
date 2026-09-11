@@ -1,0 +1,15 @@
+name: local-composite-setup
+description: Local composite action that references third-party actions and a nested local action.
+runs:
+  using: composite
+  steps:
+    - name: third-party action referenced from a LOCAL composite
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: second third-party action from the same local composite
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: nested LOCAL composite action
+      uses: ./.github/actions/inner

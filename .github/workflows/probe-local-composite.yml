@@ -1,0 +1,48 @@
+name: probe-local-composite
+
+on:
+  workflow_dispatch:
+
+jobs:
+  local-composite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SNAPSHOT 1 - before checkout, before any local action
+        run: |
+          echo "::group::_actions at job start"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sort || echo "NO _actions DIR"
+          echo "::endgroup::"
+          echo "::group::completed markers"
+          find "$RUNNER_WORKSPACE/../_actions" -name '*.completed' 2>/dev/null | sort || true
+          echo "::endgroup::"
+          echo "GITHUB_WORKFLOW_REF=$GITHUB_WORKFLOW_REF"
+          echo "GITHUB_JOB=$GITHUB_JOB"
+          echo "workflow yaml on disk? "
+          test -f "$GITHUB_WORKSPACE/.github/workflows/probe-local-composite.yml" && echo YES || echo NO
+
+      - name: control - third-party action used directly by the workflow
+        uses: actions/checkout@v4
+
+      - name: SNAPSHOT 2 - after checkout, before the local composite runs
+        run: |
+          echo "::group::_actions after checkout"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sort || echo "NO _actions DIR"
+          echo "::endgroup::"
+
+      - name: the LOCAL composite action
+        uses: ./.github/actions/setup
+
+      - name: SNAPSHOT 3 - after the local composite action ran
+        run: |
+          echo "::group::_actions after local composite"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sort || echo "NO _actions DIR"
+          echo "::endgroup::"
+          echo "::group::all completed markers"
+          find "$RUNNER_WORKSPACE/../_actions" -name '*.completed' 2>/dev/null | sort || true
+          echo "::endgroup::"
+          echo "::group::is the local action anywhere under _actions?"
+          find "$RUNNER_WORKSPACE/../_actions" -iname '*demo-workflows*' -o -iname '*setup*' -maxdepth 2 2>/dev/null | sort || true
+          echo "::endgroup::"
+          echo "::group::local action dir in the workspace"
+          ls -la "$GITHUB_WORKSPACE/.github/actions/setup" "$GITHUB_WORKSPACE/.github/actions/inner" 2>/dev/null || true
+          echo "::endgroup::"
