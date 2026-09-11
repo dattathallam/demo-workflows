@@ -69,3 +69,18 @@ jobs:
       - name: what did the runner actually fetch?
         run: |
           find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | grep -E 'setup-(node|java)' | sort | sed 's/^/  FETCHED: /'
+
+  # No checkout at all: nothing has populated the workspace, so there is no local action to read.
+  base-workflow-no-checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: workspace state before any checkout
+        run: |
+          echo "GITHUB_WORKSPACE contents:"
+          ls -la "$GITHUB_WORKSPACE" 2>&1 | head -5
+          test -f "$GITHUB_WORKSPACE/.github/actions/prprobe/action.yml" && echo "local action PRESENT" || echo "local action ABSENT"
+      - name: run the local composite action with nothing checked out
+        continue-on-error: true
+        uses: ./.github/actions/prprobe
+      - name: did it run?
+        run: echo "reached the step after the local action"
