@@ -30,4 +30,12 @@ jobs:
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$(echo "$GITHUB_WORKFLOW_REF" | sed "s|^$GITHUB_REPOSITORY/||; s|@.*||")?ref=$GITHUB_SHA" \
             | grep -E 'WORKFLOW-VERSION' || echo "  (no marker found)"
-      - uses: ./.github/actions/prprobe
+      - name: checkout (default ref for this trigger)
+        uses: actions/checkout@v4
+      - name: which ref did checkout actually give us?
+        run: |
+          echo "HEAD = $(git rev-parse HEAD)"
+          echo "--- the local action as checked out ---"
+          grep -E 'VERSION =|uses:' .github/actions/prprobe/action.yml || true
+      - name: run the local composite action
+        uses: ./.github/actions/prprobe
