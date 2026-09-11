@@ -1,5 +1,5 @@
 name: pr-semantics-pull_request
-# WORKFLOW-VERSION = BASE
+# WORKFLOW-VERSION = PR-MODIFIED
 on:
   pull_request:
     branches: [main]
