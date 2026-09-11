@@ -1,0 +1,46 @@
+name: probe-synth-local-action
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  # No checkout anywhere. A run: step fabricates the local action, then it is used.
+  synthesized:
+    runs-on: ubuntu-latest
+    steps:
+      - name: confirm nothing is checked out
+        run: |
+          ls -la "$GITHUB_WORKSPACE" | head -3
+          test -d "$GITHUB_WORKSPACE/.github" && echo ".github PRESENT" || echo ".github ABSENT"
+
+      - name: fabricate a local action at runtime
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.github/actions/synth"
+          cat > "$GITHUB_WORKSPACE/.github/actions/synth/action.yml" <<'YML'
+          name: synthesized-action
+          description: Written by a run: step in this very job. Exists in no commit.
+          runs:
+            using: composite
+            steps:
+              - name: marker
+                shell: bash
+                run: echo "SYNTHESIZED LOCAL ACTION RAN"
+              - uses: actions/setup-java@v4
+                with:
+                  distribution: temurin
+                  java-version: '21'
+          YML
+          echo "written:"; cat "$GITHUB_WORKSPACE/.github/actions/synth/action.yml" | head -3
+
+      - name: _actions before using it
+        run: |
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort | sed 's/^/  BEFORE_/'
+
+      - name: use the fabricated local action
+        uses: ./.github/actions/synth
+
+      - name: _actions after
+        run: |
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort | sed 's/^/  AFTER_/'
