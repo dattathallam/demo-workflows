@@ -1,0 +1,50 @@
+name: probe-api-resolve
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/local-composite]
+
+jobs:
+  # Worst case: no token permissions at all.
+  no-permissions:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: STEP 1 - resolve via API, before any checkout
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "workflow yaml on disk? $(test -f "$GITHUB_WORKSPACE/.github/workflows/probe-api-resolve.yml" && echo YES || echo NO)"
+          echo "_actions at this moment:"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort || echo "  (none)"
+          echo
+          curl -sSL -o /tmp/resolve.py "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/.github/scripts/resolve-actions.py" 2>/dev/null \
+            || echo "raw fetch failed, will use inline copy"
+          python3 -c "import yaml" && echo "pyyaml present"
+          python3 /tmp/resolve.py
+      - uses: ./.github/actions/setup
+
+  # Same thing with an explicit read grant, for comparison.
+  contents-read:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: STEP 1 - resolve via API, before any checkout
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -sSL -o /tmp/resolve.py "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/.github/scripts/resolve-actions.py"
+          python3 /tmp/resolve.py
+      - uses: ./.github/actions/setup
+
+  # Control: no token supplied at all, i.e. what a pre-job hook has (F16).
+  no-token:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: STEP 1 - resolve with NO token, as a hook would
+        run: |
+          curl -sSL -o /tmp/resolve.py "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/.github/scripts/resolve-actions.py"
+          python3 /tmp/resolve.py
