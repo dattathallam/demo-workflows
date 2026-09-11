@@ -63,6 +63,14 @@ jobs:
         run: |
           grep -E 'VERSION =|uses: actions/' .github/actions/prprobe/action.yml | sed 's/^/  ON DISK: /'
 
+      - name: _actions BEFORE the local composite runs (the gate's vantage point)
+        run: |
+          echo "is the local action itself anywhere in _actions?"
+          find "$RUNNER_WORKSPACE/../_actions" -ipath '*prprobe*' 2>/dev/null | sed 's/^/  /' || true
+          echo "  (nothing above means: not present)"
+          echo "full _actions tree:"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort | sed 's/^/  BEFORE: /'
+
       - name: run the local composite action from the workspace
         uses: ./.github/actions/prprobe
 
