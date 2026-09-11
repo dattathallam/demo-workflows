@@ -37,6 +37,7 @@ jobs:
         run: |
           curl -sSL -o /tmp/resolve.py "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/.github/scripts/resolve-actions.py"
           python3 /tmp/resolve.py
+      # This job must itself reference the local composite, or there is nothing to resolve.
       - uses: ./.github/actions/setup
 
   # Control: no token supplied at all, i.e. what a pre-job hook has (F16).
@@ -48,3 +49,5 @@ jobs:
         run: |
           curl -sSL -o /tmp/resolve.py "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/.github/scripts/resolve-actions.py"
           python3 /tmp/resolve.py
+      # This job must itself reference the local composite, or there is nothing to resolve.
+      - uses: ./.github/actions/setup
