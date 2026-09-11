@@ -39,3 +39,32 @@ jobs:
           grep -E 'VERSION =|uses:' .github/actions/prprobe/action.yml || true
       - name: run the local composite action
         uses: ./.github/actions/prprobe
+
+  # The classic "pwn request" shape: workflow text comes from base (trusted), but it
+  # explicitly checks out the PR head, so the workspace holds attacker-controlled files.
+  base-workflow-head-checkout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: what does the API at GITHUB_SHA claim the local action is?
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "GITHUB_SHA = $GITHUB_SHA  (base)"
+          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/.github/actions/prprobe/action.yml?ref=$GITHUB_SHA" \
+            | grep -E 'VERSION =|uses: actions/' | sed 's/^/  API SAYS: /'
+
+      - name: checkout the PR HEAD explicitly
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: what is actually on disk now?
+        run: grep -E 'VERSION =|uses: actions/' .github/actions/prprobe/action.yml | sed 's/^/  ON DISK: /'
+
+      - name: run the local composite action from the workspace
+        uses: ./.github/actions/prprobe
+
+      - name: what did the runner actually fetch?
+        run: |
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | grep -E 'setup-(node|java)' | sort | sed 's/^/  FETCHED: /'
