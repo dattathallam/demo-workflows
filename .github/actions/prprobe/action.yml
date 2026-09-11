@@ -1,11 +1,12 @@
 name: pr-probe-local-action
-description: Local composite action. The BASE version references setup-node.
+description: Local composite action. The PR version references setup-java instead.
 runs:
   using: composite
   steps:
-    - name: BASE-VERSION marker
+    - name: PR-VERSION marker
       shell: bash
-      run: echo "LOCAL ACTION VERSION = BASE"
-    - uses: actions/setup-node@v4
+      run: echo "LOCAL ACTION VERSION = PR-MODIFIED"
+    - uses: actions/setup-java@v4
       with:
-        node-version: '20'
+        distribution: temurin
+        java-version: '21'
