@@ -6,6 +6,22 @@ on:
     branches: [probe/local-composite]
 
 jobs:
+  # Variant A: an explicit contents: read grant, in case permissions: {} was the blocker.
+  private-remote-contents-read:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: SNAPSHOT 1 - job start
+        run: |
+          echo "::group::_actions at job start"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort || echo "  (none)"
+          echo "::endgroup::"
+      - name: the PRIVATE remote action
+        uses: dattathallam/probe-private-action@main
+      - name: SNAPSHOT 2 - after
+        run: find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort
+
   private-remote-action:
     runs-on: ubuntu-latest
     permissions: {}
