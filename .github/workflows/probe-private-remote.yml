@@ -1,0 +1,40 @@
+name: probe-private-remote
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/local-composite]
+
+jobs:
+  private-remote-action:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: SNAPSHOT 1 - job start, before any step has used the private action
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::_actions at job start"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort || echo "  (none)"
+          echo "::endgroup::"
+          echo "::group::can GITHUB_TOKEN read the PRIVATE action repo via contents API?"
+          code=$(curl -s -o /tmp/priv.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/dattathallam/probe-private-action/contents/action.yml?ref=main")
+          echo "HTTP $code"
+          head -c 300 /tmp/priv.json; echo
+          echo "::endgroup::"
+          echo "::group::same call with NO token"
+          curl -s -o /dev/null -w 'HTTP %{http_code}\n' \
+            "https://api.github.com/repos/dattathallam/probe-private-action/contents/action.yml?ref=main"
+          echo "::endgroup::"
+
+      - name: the PRIVATE remote action, from another repo
+        uses: dattathallam/probe-private-action@main
+
+      - name: SNAPSHOT 2 - after the private action ran
+        run: |
+          echo "::group::_actions after"
+          find "$RUNNER_WORKSPACE/../_actions" -maxdepth 3 2>/dev/null | sed 's|.*/_actions|_actions|' | sort || echo "  (none)"
+          echo "::endgroup::"
