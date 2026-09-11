@@ -60,7 +60,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: what is actually on disk now?
-        run: grep -E 'VERSION =|uses: actions/' .github/actions/prprobe/action.yml | sed 's/^/  ON DISK: /'
+        run: |
+          grep -E 'VERSION =|uses: actions/' .github/actions/prprobe/action.yml | sed 's/^/  ON DISK: /'
 
       - name: run the local composite action from the workspace
         uses: ./.github/actions/prprobe
