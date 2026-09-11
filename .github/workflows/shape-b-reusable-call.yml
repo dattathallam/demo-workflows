@@ -1,0 +1,7 @@
+name: Shape B - reusable call job with no runs-on
+on:
+  push:
+    branches: [probe/job-shape]
+jobs:
+  call-shared:
+    uses: ./.github/workflows/shape-b-callee.yml

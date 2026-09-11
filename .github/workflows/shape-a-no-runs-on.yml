@@ -1,0 +1,8 @@
+name: Shape A - steps job with no runs-on
+on:
+  push:
+    branches: [probe/job-shape]
+jobs:
+  build:
+    steps:
+      - run: echo "is a steps job valid without runs-on?"

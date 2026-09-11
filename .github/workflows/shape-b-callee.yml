@@ -1,0 +1,8 @@
+name: Shape B callee
+on:
+  workflow_call:
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "callee ran - the CALLER's call-shared job declared no runs-on"
