@@ -45,3 +45,16 @@ jobs:
     steps:
       - uses: actions/checkout@refs/pull/2264/merge
       - run: echo "RESOLVED refs/pull/2264/merge"
+
+  # Negative controls: these are expected to FAIL at "Getting action download info".
+  short-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960
+      - run: echo "RESOLVED short sha (unexpected)"
+
+  nonexistent-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@this-ref-does-not-exist
+      - run: echo "RESOLVED nonexistent ref (unexpected)"
