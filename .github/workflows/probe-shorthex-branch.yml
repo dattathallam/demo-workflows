@@ -1,0 +1,14 @@
+name: probe-shorthex-branch
+
+# c15aeb3 is BOTH the 7-char prefix of commit C (content COMMIT_C_CONTENT)
+# and a branch pointing at commit D (content BRANCH_D_CONTENT).
+# The composite action echoes RESOLVED_AS=... so the log reveals which won.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  shorthex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-sha-branch@c15aeb3
