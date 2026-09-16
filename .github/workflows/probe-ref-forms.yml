@@ -1,0 +1,47 @@
+name: probe-ref-forms
+
+# Tests which `uses:` ref forms the Actions service will resolve.
+# Each job resolves actions/checkout at a different ref form. Action download
+# resolution happens server-side at job setup ("Getting action download info"),
+# so an unsupported ref fails that job immediately. Jobs are independent, so
+# every form is exercised regardless of the others.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  shorthand-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "RESOLVED shorthand tag v4"
+
+  full-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: echo "RESOLVED full sha"
+
+  fq-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@refs/heads/main
+      - run: echo "RESOLVED refs/heads/main"
+
+  fq-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@refs/tags/v4
+      - run: echo "RESOLVED refs/tags/v4"
+
+  pull-head:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@refs/pull/2264/head
+      - run: echo "RESOLVED refs/pull/2264/head"
+
+  pull-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@refs/pull/2264/merge
+      - run: echo "RESOLVED refs/pull/2264/merge"
