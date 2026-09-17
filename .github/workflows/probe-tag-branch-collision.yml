@@ -1,0 +1,58 @@
+name: probe-tag-branch-collision
+
+# Action repo dattathallam/probe-tag-branch-collision has:
+#   annotated tag  collision -> commit 5430086921c83cbf70d42154051b1917c0c4a2d8 (MARKER=TAG_CONTENT)
+#   branch         collision -> commit 7f65769ec680267df910d1bfb02caec92f614ac7 (MARKER=BRANCH_CONTENT)
+# Jobs are independent so a setup-time resolve failure in one does not skip the others.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bare-name:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@collision
+
+  fq-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@refs/tags/collision
+
+  fq-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@refs/heads/collision
+
+  tag-commit-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@5430086921c83cbf70d42154051b1917c0c4a2d8
+
+  branch-commit-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@7f65769ec680267df910d1bfb02caec92f614ac7
+
+  annotated-tag-object-sha:
+    # annotated tag object id (type=tag), NOT the peeled commit. Expected: either
+    # rejected or resolved to that object; production must know which.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@e7b6efb26415b1da9a89ab3b4b984d9ff6da253f
+
+  slash-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@feature/x
+
+  short-sha-39:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@5430086921c83cbf70d42154051b1917c0c4a2d
+
+  short-sha-7-tag-prefix:
+    # 5430086 uniquely prefixes the TAG commit; there is no ref with this name.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/probe-tag-branch-collision@5430086
