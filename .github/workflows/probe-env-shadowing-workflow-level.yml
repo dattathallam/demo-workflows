@@ -1,0 +1,26 @@
+name: Probe - env shadowing at workflow level (github.com)
+
+# The workflow-level half of probe-env-shadowing.yml. Separate file because a
+# workflow-level env: applies to every job in its file and would poison the
+# control job there.
+
+on:
+  workflow_dispatch:
+
+env:
+  PROBE_MARKER: workflow-level
+  RUNNER_WORKSPACE: /tmp/shadow-workflow-level/work
+  GITHUB_REPOSITORY: attacker/workflow-level
+
+jobs:
+  workflow-level:
+    name: "workflow-level env: (job sets nothing itself)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        env:
+          PROBE_SCOPE: workflow-level
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      - name: JS action under the workflow-level shadow
+        uses: ./.github/actions/dirname-probe

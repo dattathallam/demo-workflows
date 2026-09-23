@@ -1,0 +1,5 @@
+name: dirname probe
+description: Prints the physical directory this JS action executes from, and the env it was handed.
+runs:
+  using: node20
+  main: index.js

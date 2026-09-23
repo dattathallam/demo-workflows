@@ -1,0 +1,78 @@
+name: Probe - env shadowing of runner defaults (github.com)
+
+# Validates or refutes the premise behind curation findings S1 and S2:
+#
+#   "RUNNER_WORKSPACE and GITHUB_REPOSITORY can be shadowed by a job- or
+#    step-level env: block, so `jf curate-gh-actions` reads an attacker-chosen
+#    action cache and an attacker-chosen policy scope."
+#
+# The claim has two independent halves:
+#
+#   A. Does the shadow LAND - does env: win over the value the runner sets?
+#      Only A is tested here. Nothing in this file runs jf.
+#   B. Does a wrong value disarm the gate? That is our own code and is
+#      testable locally without GitHub.
+#
+# If A is false, S1 and S2 drop from Critical: trusting env would still be
+# wrong, but no workflow author could reach it this way.
+#
+# Ground truth on a hosted ubuntu runner is /home/runner/work/_actions, so each
+# job compares the env-derived path against the real one without having to
+# trust the variable under test.
+#
+# Workflow-level env: is deliberately NOT set here - it would apply to every
+# job and poison the control. That level is covered by the sibling file
+# probe-env-shadowing-workflow-level.yml.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  control:
+    name: control - nothing overridden
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        env:
+          PROBE_SCOPE: control
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      - name: JS action - baseline
+        uses: ./.github/actions/dirname-probe
+
+  step-level:
+    name: "step-level env:"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: report under a step-level shadow
+        env:
+          PROBE_SCOPE: step-level
+          PROBE_MARKER: step-level
+          RUNNER_WORKSPACE: /tmp/shadow-step-level/work
+          GITHUB_REPOSITORY: attacker/step-level
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      # Same shadow, but delivered to a `uses:` action rather than a `run:` step -
+      # the path that matters, since the real check is invoked by an action.
+      - name: JS action under a step-level shadow
+        uses: ./.github/actions/dirname-probe
+        env:
+          PROBE_MARKER: step-level
+          RUNNER_WORKSPACE: /tmp/shadow-step-level/work
+          GITHUB_REPOSITORY: attacker/step-level
+
+  job-level:
+    name: "job-level env:"
+    runs-on: ubuntu-latest
+    env:
+      PROBE_MARKER: job-level
+      RUNNER_WORKSPACE: /tmp/shadow-job-level/work
+      GITHUB_REPOSITORY: attacker/job-level
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        env:
+          PROBE_SCOPE: job-level
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      - name: JS action under the job-level shadow
+        uses: ./.github/actions/dirname-probe
