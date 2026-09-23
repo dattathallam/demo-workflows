@@ -2,7 +2,14 @@
 # Shared reporting body for the env-shadowing probes. Reads only; never fails a job.
 set -uo pipefail
 
-REAL_ACTIONS=/home/runner/work/_actions   # ground truth on a hosted ubuntu runner
+# Ground truth, discovered rather than assumed: a self-hosted runner does not use the
+# hosted /home/runner/work layout. The primary signal does not depend on this - a shadow is
+# detected by the sentinel value itself - so an undiscovered root only costs the comparison.
+REAL_ACTIONS=""
+for root in /home/runner/work "$HOME/Downloads/actions-runner/_work" "$RUNNER_WORKSPACE/.."; do
+  [ -d "$root/_actions" ] && { REAL_ACTIONS="$(cd "$root/_actions" && pwd)"; break; }
+done
+[ -z "$REAL_ACTIONS" ] && REAL_ACTIONS="<not found>"
 
 echo "::group::[$PROBE_SCOPE] values as the step process sees them"
 for v in PROBE_MARKER RUNNER_WORKSPACE GITHUB_REPOSITORY GITHUB_WORKSPACE GITHUB_JOB; do

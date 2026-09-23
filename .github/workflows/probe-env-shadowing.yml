@@ -76,3 +76,54 @@ jobs:
         run: bash .github/workflows/probe-env-shadowing-report.sh
       - name: JS action under the job-level shadow
         uses: ./.github/actions/dirname-probe
+
+  # ---- self-hosted twin -------------------------------------------------
+  # Same three scopes on a self-hosted runner (saisdt-mac). If the protection
+  # holds here too it is a property of the runner binary; if it does not, it
+  # comes from the hosted runner image or the control plane, and self-hosted
+  # deployments would be exposed where hosted ones are not.
+
+  self-hosted-control:
+    name: self-hosted - control
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        env:
+          PROBE_SCOPE: self-hosted-control
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+
+  self-hosted-step-level:
+    name: "self-hosted - step-level env:"
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: report under a step-level shadow
+        env:
+          PROBE_SCOPE: self-hosted-step-level
+          PROBE_MARKER: self-hosted-step-level
+          RUNNER_WORKSPACE: /tmp/shadow-step-level/work
+          GITHUB_REPOSITORY: attacker/step-level
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      - name: JS action under a step-level shadow
+        uses: ./.github/actions/dirname-probe
+        env:
+          PROBE_MARKER: self-hosted-step-level
+          RUNNER_WORKSPACE: /tmp/shadow-step-level/work
+          GITHUB_REPOSITORY: attacker/step-level
+
+  self-hosted-job-level:
+    name: "self-hosted - job-level env:"
+    runs-on: [self-hosted]
+    env:
+      PROBE_MARKER: self-hosted-job-level
+      RUNNER_WORKSPACE: /tmp/shadow-job-level/work
+      GITHUB_REPOSITORY: attacker/job-level
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        env:
+          PROBE_SCOPE: self-hosted-job-level
+        run: bash .github/workflows/probe-env-shadowing-report.sh
+      - name: JS action under the job-level shadow
+        uses: ./.github/actions/dirname-probe
