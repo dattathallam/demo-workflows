@@ -1,0 +1,29 @@
+name: Reusable - identity probe (same repo)
+
+# The same-repo half of probe-reusable-workflow-identity.yml, so the cross-repo result can be
+# compared against a call that never leaves this repository.
+
+on:
+  workflow_call:
+
+jobs:
+  identity:
+    name: identity inside a same-repo called workflow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        run: |
+          echo "::group::identity inside the same-repo called workflow"
+          for v in GITHUB_REPOSITORY GITHUB_WORKFLOW GITHUB_WORKFLOW_REF GITHUB_JOB RUNNER_WORKSPACE; do
+            printf '  %-22s = %s\n' "$v" "${!v:-<UNSET>}"
+          done
+          echo "::endgroup::"
+          {
+            echo "### called reusable workflow (same repo)"
+            echo ""
+            echo "| var | value |"
+            echo "|---|---|"
+            echo "| \`GITHUB_REPOSITORY\` | \`$GITHUB_REPOSITORY\` |"
+            echo "| \`GITHUB_WORKFLOW_REF\` | \`$GITHUB_WORKFLOW_REF\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

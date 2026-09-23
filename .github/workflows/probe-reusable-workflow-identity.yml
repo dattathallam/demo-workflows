@@ -1,0 +1,53 @@
+name: Probe - reusable workflow identity (github.com)
+
+# Which repository's curation policies govern a job inside a called reusable workflow?
+#
+# The CLI takes the policy scope from GITHUB_REPOSITORY. A called reusable workflow runs its
+# jobs on their own runners with their own action caches, so if `jf curate-gh-actions` is added
+# inside one, the question is whose policies it is judged by:
+#
+#   caller  -> a shared reusable workflow is judged per-caller, and the repository that hosts
+#              the workflow has no say over its own steps
+#   callee  -> every caller is judged by the hosting repository's policies, which would make
+#              onboarding meaningless for the calling repositories
+#
+# Three jobs, so the answer is read off a comparison rather than an assumption:
+#   1. caller-local  - a plain job in this repository, the baseline
+#   2. same-repo     - a reusable workflow in this repository
+#   3. cross-repo    - a reusable workflow in dattathallam/hello-world-static
+#
+# GITHUB_WORKFLOW_REF is reported too: the CLI derives the workflow file from it, so if it names
+# a different repository than GITHUB_REPOSITORY, attribution and policy scope disagree.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  caller-local:
+    name: baseline - a job in the calling repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: report
+        run: |
+          echo "::group::identity in the calling repository"
+          for v in GITHUB_REPOSITORY GITHUB_WORKFLOW_REF GITHUB_JOB RUNNER_WORKSPACE; do
+            printf '  %-22s = %s\n' "$v" "${!v:-<UNSET>}"
+          done
+          echo "::endgroup::"
+          {
+            echo "### baseline - calling repository"
+            echo ""
+            echo "| var | value |"
+            echo "|---|---|"
+            echo "| \`GITHUB_REPOSITORY\` | \`$GITHUB_REPOSITORY\` |"
+            echo "| \`GITHUB_WORKFLOW_REF\` | \`$GITHUB_WORKFLOW_REF\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  same-repo-reusable:
+    name: called reusable workflow - same repository
+    uses: ./.github/workflows/reusable-identity-local.yml
+
+  cross-repo-reusable:
+    name: called reusable workflow - another repository
+    uses: dattathallam/hello-world-static/.github/workflows/reusable-identity-probe.yml@main
