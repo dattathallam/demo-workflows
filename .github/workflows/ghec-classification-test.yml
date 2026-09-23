@@ -1,0 +1,113 @@
+name: GHEC Classification Test
+
+# Verifies the GHEC classification on github.com with the workflow token only.
+#
+# The point of interest is multi-org first-party: TRUSTED holds owner ids for
+# BOTH dattathallam (8924432) and silcnitc (4353117), so repos under either
+# must come out OWN_ORG_PUBLIC while everything else stays third-party. That
+# is the "same company, several orgs" case.
+#
+# Matching is on the immutable numeric owner id, never the login — a login can
+# be renamed or freed and re-registered, so a name-based allowlist would be a
+# name-confusion vector in its own right.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/token-capability]
+
+jobs:
+  classify:
+    name: classify with workflow token only
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      # dattathallam + silcnitc. eXpOSNitc (10722149) is deliberately LEFT OUT
+      # to prove the set is respected rather than every known org passing.
+      TRUSTED_OWNER_IDS: "8924432,4353117"
+    steps:
+      - name: Classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF_OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.error, urllib.request
+
+          TOKEN = os.environ["GH_TOKEN"]
+          TRUSTED = {t for t in re.split(r"[,\s]+", os.environ.get("TRUSTED_OWNER_IDS","")) if t}
+          if os.environ.get("SELF_OWNER_ID","").strip():
+              TRUSTED.add(os.environ["SELF_OWNER_ID"].strip())
+
+          # (owner, repo, expected verdict)
+          TARGETS = [
+              ("dattathallam", "demo-workflows",         "OWN_ORG_PUBLIC"),
+              ("dattathallam", "demo-compliance-action", "OWN_ORG_PUBLIC"),
+              ("silcnitc",     "sample-code",            "OWN_ORG_PUBLIC"),
+              ("eXpOSNitc",    "spl",                    "THIRD_PARTY_PUBLIC(org)"),
+              ("docker",       "login-action",           "THIRD_PARTY_PUBLIC(org)"),
+              ("softprops",    "action-gh-release",      "THIRD_PARTY_PUBLIC(user)"),
+              ("actions",      "checkout",               "THIRD_PARTY_PUBLIC(org)"),
+              ("dattathallam", "gh-action-docker",       "NOT_PUBLIC"),
+              ("github",       "github",                 "NOT_PUBLIC"),
+          ]
+
+          lines = ["{"]
+          for i, (o, r, _) in enumerate(TARGETS):
+              lines.append(
+                  f'  r{i}: repository(owner:{json.dumps(o)}, name:{json.dumps(r)})'
+                  ' { visibility owner { login __typename'
+                  '   ... on Organization { databaseId }'
+                  '   ... on User { databaseId } } }')
+          lines.append("  rateLimit { cost limit remaining }")
+          lines.append("}")
+
+          req = urllib.request.Request(
+              "https://api.github.com/graphql",
+              data=json.dumps({"query": "\n".join(lines)}).encode(), method="POST")
+          req.add_header("Authorization", f"Bearer {TOKEN}")
+          req.add_header("Content-Type", "application/json")
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  payload = json.load(resp)
+          except urllib.error.HTTPError as e:
+              print(f"::error::GraphQL HTTP {e.code}: {e.read()[:300]!r}")
+              raise SystemExit(1)
+
+          data = payload.get("data") or {}
+          rl = data.get("rateLimit") or {}
+          print(f"::group::classification (trusted owner ids: {sorted(TRUSTED)})")
+          print(f"  one request, cost={rl.get('cost')} of {rl.get('limit')}/hr\n")
+
+          def classify(rec):
+              if not rec:
+                  return "NOT_PUBLIC"                       # NOT_FOUND
+              if rec["visibility"] != "PUBLIC":
+                  return "NOT_PUBLIC"
+              o = rec.get("owner") or {}
+              oid = o.get("databaseId")
+              if oid is not None and str(oid) in TRUSTED:
+                  return "OWN_ORG_PUBLIC"
+              kind = "user" if o.get("__typename") == "User" else "org"
+              return f"THIRD_PARTY_PUBLIC({kind})"
+
+          hdr = f"  {'target':40} {'owner id':10} {'got':26} {'expected':26} ok"
+          print(hdr); print("  " + "-"*(len(hdr)-2))
+          ok_all = True
+          for i, (o, r, expected) in enumerate(TARGETS):
+              rec = data.get(f"r{i}")
+              got = classify(rec)
+              oid = str(((rec or {}).get("owner") or {}).get("databaseId"))
+              ok = got == expected
+              ok_all = ok_all and ok
+              print(f"  {o+'/'+r:40} {oid:10} {got:26} {expected:26} "
+                    f"{'OK' if ok else 'MISMATCH'}")
+          print("::endgroup::")
+
+          print(f"::notice title=GHEC classification::"
+                f"{'ALL CORRECT' if ok_all else 'MISMATCH'} - "
+                f"{len(TARGETS)} targets, 1 request, cost {rl.get('cost')}")
+          if not ok_all:
+              print("::error title=Classification mismatch::see table above")
+              raise SystemExit(1)
+          PY

@@ -1,0 +1,81 @@
+name: Owner Discovery Probe
+
+# Can the workflow token DISCOVER the first-party owner ids by itself, or must
+# they be supplied? Probes every plausible route with permissions: {} so the
+# result is a floor.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/token-capability]
+
+jobs:
+  discover:
+    name: what can the workflow token enumerate?
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Probe discovery routes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF_OWNER: ${{ github.repository_owner }}
+          SELF_OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          T = os.environ["GH_TOKEN"]
+
+          def rest(path):
+              r = urllib.request.Request(f"https://api.github.com{path}")
+              r.add_header("Authorization", f"Bearer {T}")
+              r.add_header("Accept", "application/vnd.github+json")
+              try:
+                  with urllib.request.urlopen(r, timeout=15) as resp:
+                      return resp.status, json.load(resp)
+              except urllib.error.HTTPError as e:
+                  return e.code, None
+
+          def gql(q):
+              r = urllib.request.Request("https://api.github.com/graphql",
+                    data=json.dumps({"query": q}).encode(), method="POST")
+              r.add_header("Authorization", f"Bearer {T}")
+              r.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(r, timeout=20) as resp:
+                      return resp.status, json.load(resp)
+              except urllib.error.HTTPError as e:
+                  return e.code, None
+
+          print("::group::A. free from the runner context (no API call)")
+          print(f"  github.repository_owner    = {os.environ['SELF_OWNER']}")
+          print(f"  github.repository_owner_id = {os.environ['SELF_OWNER_ID']}")
+          print("::endgroup::")
+
+          print("::group::B. enumerate MY orgs (would give the whole set)")
+          for path in ("/user/orgs", "/user"):
+              code, body = rest(path)
+              print(f"  REST {path:14} -> HTTP {code}")
+          code, body = gql("{ viewer { login organizations(first:5){ nodes{ login databaseId } } } }")
+          errs = [e.get("message","")[:110] for e in (body or {}).get("errors",[])]
+          print(f"  GraphQL viewer.organizations -> HTTP {code}"
+                + (f"\n      err: {errs[0]}" if errs else
+                   f"\n      data: {json.dumps((body or {}).get('data'))[:160]}"))
+          print("::endgroup::")
+
+          print("::group::C. enumerate the ENTERPRISE's orgs")
+          code, body = gql('{ viewer { enterprises(first:5){ nodes{ slug } } } }')
+          errs = [e.get("message","")[:130] for e in (body or {}).get("errors",[])]
+          print(f"  GraphQL viewer.enterprises -> HTTP {code}"
+                + (f"\n      err: {errs[0]}" if errs else ""))
+          print("::endgroup::")
+
+          print("::group::D. resolve a KNOWN org name -> id (verify, not discover)")
+          for org in ("silcnitc", "eXpOSNitc", "docker"):
+              code, body = rest(f"/orgs/{org}")
+              print(f"  GET /orgs/{org:12} -> HTTP {code}  id={(body or {}).get('id')}")
+          print("::endgroup::")
+
+          print("::notice title=Discovery::A=free(1 owner) | "
+                "B/C=enumeration | D=name->id resolution - see groups above")
+          PY
