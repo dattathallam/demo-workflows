@@ -1,0 +1,103 @@
+name: spike-docker-rebuild
+# Throwaway spike for XRAY-161485: can a step find and overwrite the image the runner cached for a
+# Dockerfile action during "Set up job", so the later docker step runs the rebuilt image?
+on:
+  push:
+    branches: [spike/docker-rebuild]
+jobs:
+  spike:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe and rebuild
+        shell: bash
+        env:
+          NESTED_SHA: 3cfd8339184db0dc5ad5fbe976acd12a6faee6e0
+        run: |
+          set -u
+          echo "::group::docker"
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+          docker buildx version || true
+          echo "DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-unset} DOCKER_HOST=${DOCKER_HOST:-unset}"
+          echo "::endgroup::"
+
+          echo "::group::process tree"
+          pid=$$; worker=""
+          while [ "$pid" -gt 1 ]; do
+            cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null || true)
+            exe=$(readlink /proc/$pid/exe 2>/dev/null || echo "?")
+            echo "$pid exe=$exe cmd=$cmd"
+            case "$exe $cmd" in *Runner.Worker*) [ -z "$worker" ] && worker=$pid;; esac
+            pid=$(sed -E 's/^[0-9]+ \(.*\) [A-Z] ([0-9]+) .*/\1/' /proc/$pid/stat)
+          done
+          echo "::endgroup::"
+          echo "worker pid=$worker"
+          wexe=$(readlink /proc/$worker/exe || true)
+          echo "worker exe=$wexe"
+          root=$(dirname "$(dirname "$wexe")")
+          echo "runner root=$root"
+          ls -la "$root" | head -30
+          label=$(sha256sum "$root/.runner" | cut -c1-6)
+          echo "label from sha256(.runner)=$label"
+
+          echo "::group::images"
+          docker images --no-trunc
+          echo "::endgroup::"
+
+          echo "=== Approach A: Worker diag log"
+          ls -l /proc/$worker/fd 2>/dev/null | grep -i diag || echo "no diag fd visible"
+          ls -la "$root/_diag" || true
+          wlog=$(ls -1t "$root"/_diag/Worker_*.log 2>/dev/null | head -1)
+          echo "newest worker log=$wlog size=$(stat -c %s "$wlog" 2>/dev/null)"
+          grep -n "Prepared docker image\|needs to build image\|needs to pull image" "$wlog" || echo "A: no mapping lines found"
+
+          actions="$(dirname "$RUNNER_WORKSPACE")/_actions"
+          top="$actions/dattathallam/demo-workflows/spike/docker-rebuild/.github/actions/spike-docker"
+          nested="$actions/dattathallam/demo-workflows/$NESTED_SHA/.github/actions/spike-docker"
+          echo "::group::action cache"
+          find "$actions" -maxdepth 6 | sed "s|$actions/||" | sort
+          echo "::endgroup::"
+
+          echo "=== Approach B: rebuild old content, match image ID"
+          for dir in "$top" "$nested"; do
+            start=$(date +%s%N)
+            id=$(docker build -q -f "$dir/Dockerfile" "$dir" 2>&1 | tail -1)
+            echo "B: $dir -> rebuilt id=$id in $(( ($(date +%s%N) - start) / 1000000 ))ms"
+            for tag in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$label:"); do
+              tid=$(docker image inspect --format '{{.Id}}' "$tag")
+              [ "$tid" = "$id" ] && echo "B:   MATCH $tag" || echo "B:   no-match $tag ($tid)"
+            done
+          done
+
+          echo "=== Rebuild under the cached tag (tag from A, else from B)"
+          for dir in "$top" "$nested"; do
+            tag=$(grep "Prepared docker image" "$wlog" 2>/dev/null | grep -F "($dir/Dockerfile)" | sed -E "s/.*Prepared docker image '([^']+)'.*/\1/" | head -1)
+            if [ -n "$tag" ]; then
+              echo "tag for $dir from A: $tag"
+            else
+              id=$(docker build -q -f "$dir/Dockerfile" "$dir" | tail -1)
+              tag=$(for t in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$label:"); do [ "$(docker image inspect --format '{{.Id}}' $t)" = "$id" ] && echo $t; done | head -1)
+              echo "tag for $dir from B: $tag"
+            fi
+            [ -z "$tag" ] && { echo "NO TAG for $dir"; continue; }
+            marker="SPIKE-REBUILT-MARKER $( [ "$dir" = "$top" ] && echo top || echo nested )"
+            sed -i "2i echo \"$marker\"" "$dir/entrypoint.sh"
+            head -3 "$dir/entrypoint.sh"
+            docker build -q -t "$tag" -f "$dir/Dockerfile" "$dir" && echo "rebuilt $tag"
+          done
+          docker images
+
+      - name: Top-level Dockerfile action (expect SPIKE-REBUILT-MARKER top)
+        uses: dattathallam/demo-workflows/.github/actions/spike-docker@spike/docker-rebuild
+        with:
+          file-path: README.md
+
+      - name: Composite wrapping a Dockerfile action (expect SPIKE-REBUILT-MARKER nested)
+        uses: dattathallam/demo-workflows/.github/actions/spike-composite@spike/docker-rebuild
+
+      - name: Dump worker log mapping after the docker steps
+        if: always()
+        shell: bash
+        run: |
+          pid=$$; while [ "$pid" -gt 1 ]; do exe=$(readlink /proc/$pid/exe 2>/dev/null || true); case "$exe" in *Runner.Worker*) break;; esac; pid=$(sed -E 's/^[0-9]+ \(.*\) [A-Z] ([0-9]+) .*/\1/' /proc/$pid/stat); done
+          root=$(dirname "$(dirname "$(readlink /proc/$pid/exe)")")
+          grep -n "Prepared docker image\|already built/pulled" "$root"/_diag/Worker_*.log || echo "still none"

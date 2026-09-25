@@ -1,0 +1,9 @@
+name: 'Spike composite wrapping a docker action'
+description: 'Throwaway: a remote composite whose nested step is a Dockerfile action pinned by SHA'
+runs:
+  using: 'composite'
+  steps:
+    - name: Nested docker action
+      uses: dattathallam/demo-workflows/.github/actions/spike-docker@3cfd8339184db0dc5ad5fbe976acd12a6faee6e0
+      with:
+        file-path: README.md
