@@ -1,0 +1,12 @@
+name: 'Docker File Inspector'
+description: 'Inspects a file path and returns metadata using a Docker container action'
+inputs:
+  file-path:
+    description: 'Path to the file to inspect (relative to GITHUB_WORKSPACE)'
+    required: true
+outputs:
+  file-info:
+    description: 'File metadata string'
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
