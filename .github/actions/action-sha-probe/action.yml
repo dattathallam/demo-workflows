@@ -23,9 +23,36 @@ runs:
         repo="${GITHUB_ACTION_REPOSITORY:-}"
         ref="${GITHUB_ACTION_REF:-}"
 
+        # MEASURED on runner 2.337.0: GITHUB_ACTION_REPOSITORY and
+        # GITHUB_ACTION_REF are UNSET inside a composite action's steps, even
+        # when the action was referenced remotely. GITHUB_ACTION_PATH is set,
+        # and it embeds the same information:
+        #   /home/runner/work/_actions/<owner>/<repo>/<ref>/<subpath...>
+        # so derive from the path and treat the env vars as a bonus.
         if [ -z "$repo" ] || [ -z "$ref" ]; then
-          echo "SELF-IDENTITY: unavailable (local action, or runner does not set these)"
-          exit 0
+          rel="${GITHUB_ACTION_PATH#*/_actions/}"
+          if [ "$rel" = "$GITHUB_ACTION_PATH" ]; then
+            echo "SELF-IDENTITY: unavailable (local action - not extracted into _actions)"
+            exit 0
+          fi
+          IFS='/' read -r -a seg <<<"$rel"
+          repo="${seg[0]}/${seg[1]}"
+          # A ref may itself contain slashes (refs/heads/main, feature/x), which
+          # makes the split ambiguous against the action's subpath. Resolve the
+          # ambiguity empirically: try the shortest candidate first and keep the
+          # first one the API accepts.
+          ref=""
+          for n in 1 2 3 4; do
+            cand=$(IFS='/'; echo "${seg[*]:2:$n}")
+            if gh api "repos/${repo}/commits/${cand}" --jq .sha >/dev/null 2>&1; then
+              ref="$cand"; break
+            fi
+          done
+          if [ -z "$ref" ]; then
+            echo "SELF-IDENTITY: derived repo=$repo but no ref candidate resolved"
+            exit 0
+          fi
+          echo "  derived from GITHUB_ACTION_PATH: repo=$repo ref=$ref"
         fi
 
         # Is the caller's ref already a resolution? If so there is nothing to
