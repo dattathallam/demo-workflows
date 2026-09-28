@@ -148,3 +148,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: dattathallam/demo-workflows/.github/actions/action-sha-probe@probe-sha-v1
+
+  # Control: the same action pinned by SHA. GITHUB_ACTION_REF should hold the
+  # SHA outright, making resolution unnecessary - and the tree check should
+  # still pass, confirming the verification is not producing false positives.
+  # The SHA is this branch's first commit, which is also what probe-sha-v1 tags,
+  # so both jobs must report the SAME downloaded commit by different routes.
+  identity-at-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/demo-workflows/.github/actions/action-sha-probe@75393d60d28b64b687065ba9ea3de3872814afc6
