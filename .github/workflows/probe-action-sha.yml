@@ -157,4 +157,4 @@ jobs:
   identity-at-sha:
     runs-on: ubuntu-latest
     steps:
-      - uses: dattathallam/demo-workflows/.github/actions/action-sha-probe@75393d60d28b64b687065ba9ea3de3872814afc6
+      - uses: dattathallam/demo-workflows/.github/actions/action-sha-probe@7a7ab441173c87294f0218a110110aeb47c53e6b
