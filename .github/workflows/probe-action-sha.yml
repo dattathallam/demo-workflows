@@ -33,6 +33,37 @@ name: probe-action-sha
 #      cannot: a tag that moved between the runner's download and our API call.
 #
 # Every job keeps going on failure so one dead channel does not hide the others.
+#
+# MEASURED, hosted ubuntu-latest, runner 2.337.0, runs 36390948002 / 36391319869:
+#
+#   1. GITHUB_ACTION_REPOSITORY and GITHUB_ACTION_REF are UNSET inside a
+#      composite action's steps, even when the action is referenced remotely.
+#      Only GITHUB_ACTION (a mangled slug) and GITHUB_ACTION_PATH are set. The
+#      path is the usable channel: _actions/<owner>/<repo>/<ref>/<subpath>.
+#      It still yields the ref as written, never the resolution.
+#
+#   2. _actions carries no SHA for a tag-pinned action. The `.completed` marker
+#      holds a TIMESTAMP ("09/28/2026 07:18:28"), not a commit. No 40-hex string
+#      appears anywhere in the tree for actions/checkout@v4.
+#
+#   3. DEAD on this runner. _diag/Worker_*.log and Runner_*.log exist and are
+#      readable mid-job (under actions-runner/cached/<ver>/_diag/), but contain
+#      no "Download action repository" trace and no ResolvedSha - grepped in two
+#      independent runs, zero matches. The SHA line is emitted to the job's
+#      console log during "Set up job", not into the diag trace file, and a step
+#      cannot read its own running job's console log via the API.
+#
+#   4. WORKS, and is the only in-job channel that yields a SHA for a mutable
+#      ref. actions/checkout@v4 -> 11d5960a326750d5838078e36cf38b85af677262,
+#      tree f8a7b72d... computed from disk == tree reported by the API. The
+#      identity jobs then proved the full self-identification path: a
+#      tag-referenced action derived its own commit 7a7ab441... and verified it,
+#      matching the SHA the runner logged for that same download.
+#
+# Bottom line: ACTIONS_STEP_DEBUG is irrelevant here - the SHA is in the job
+# console log unconditionally, and absent from disk regardless. An action that
+# needs its own commit must resolve GITHUB_ACTION_PATH's ref and verify the
+# bytes (channel 4); nothing hands it the answer.
 
 on:
   workflow_dispatch:
