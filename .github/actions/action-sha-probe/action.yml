@@ -1,0 +1,92 @@
+name: action-sha probe
+description: "Reports what an action can learn about its own downloaded commit, and proves it against the extracted bytes."
+
+# Must be referenced REMOTELY (owner/repo/path@ref) for this to mean anything.
+# A local `./.github/actions/...` reference leaves GITHUB_ACTION_REPOSITORY and
+# GITHUB_ACTION_REF unset, which would make the probe report a false negative.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -uo pipefail
+
+        echo "::group::What this action is told about itself"
+        for k in GITHUB_ACTION GITHUB_ACTION_REPOSITORY GITHUB_ACTION_REF GITHUB_ACTION_PATH; do
+          printf '  %-28s = %s\n' "$k" "${!k:-<UNSET>}"
+        done
+        echo "::endgroup::"
+
+        repo="${GITHUB_ACTION_REPOSITORY:-}"
+        ref="${GITHUB_ACTION_REF:-}"
+
+        if [ -z "$repo" ] || [ -z "$ref" ]; then
+          echo "SELF-IDENTITY: unavailable (local action, or runner does not set these)"
+          exit 0
+        fi
+
+        # Is the caller's ref already a resolution? If so there is nothing to
+        # discover - the answer was in the workflow text.
+        if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "SELF-IDENTITY: caller pinned by SHA; downloaded commit = $ref"
+          pinned=true
+        else
+          echo "SELF-IDENTITY: caller used mutable ref '$ref'; must resolve"
+          pinned=false
+        fi
+
+        # GITHUB_ACTION_PATH points at the subdirectory holding action.yml, which
+        # for a monorepo action is well below the extract root. Walk up to the
+        # directory named after the ref - that is what the tarball unpacked into,
+        # and the only thing comparable to a whole-commit tree.
+        root="$GITHUB_ACTION_PATH"
+        while [ "$(basename "$root")" != "$(basename "$ref")" ] && [ "$root" != "/" ]; do
+          root="$(dirname "$root")"
+        done
+        echo "  extract root inferred     = $root"
+
+        # Resolve now. For a mutable ref this is a second observation, not the
+        # runner's - if the ref moved since download, it will disagree with the
+        # bytes, and the tree comparison below is what surfaces that.
+        sha=$(gh api "repos/${repo}/commits/${ref}" --jq .sha 2>/dev/null) || {
+          echo "  resolve FAILED (ref not reachable with this token)"; exit 0; }
+        want=$(gh api "repos/${repo}/git/commits/${sha}" --jq .tree.sha)
+        echo "  ${repo}@${ref} resolves to = $sha"
+
+        # Recompute the extracted tree's git hash. cp -a preserves exec bits and
+        # symlinks, both of which a git tree hash covers.
+        tmp=$(mktemp -d)
+        cp -a "$root/." "$tmp/"
+        rm -rf "$tmp/.git"
+        git -C "$tmp" init -q
+        git -C "$tmp" add -A
+        got=$(git -C "$tmp" write-tree)
+
+        echo "  commit tree (API)         = $want"
+        echo "  extracted tree (computed) = $got"
+
+        if [ "$want" = "$got" ]; then
+          echo "VERDICT: extracted bytes verified as commit $sha"
+          echo "downloaded_sha=$sha" >>"$GITHUB_OUTPUT" 2>/dev/null || true
+        else
+          # A mismatch is not automatically a moved ref. .gitattributes
+          # export-ignore / export-subst make a tarball diverge from its tree,
+          # and submodules appear as empty dirs. Distinguish by searching
+          # history for a commit whose tree DOES match.
+          echo "VERDICT: mismatch - extracted bytes are not commit $sha's tree"
+          echo "  searching recent history of '$ref' for tree $got"
+          found=""
+          while read -r c t; do
+            if [ "$t" = "$got" ]; then found="$c"; echo "  matched commit $c"; fi
+          done < <(gh api "repos/${repo}/commits?sha=${ref}&per_page=50" \
+                     --jq '.[] | .sha + " " + .commit.tree.sha')
+          if [ -n "$found" ]; then
+            echo "  CONCLUSION: ref moved after download; runner got $found, '$ref' now points at $sha"
+          else
+            echo "  CONCLUSION: no commit in the last 50 matches - likely .gitattributes export rules"
+            echo "  (a tarball shaped by export-ignore/export-subst cannot equal the commit tree)"
+          fi
+        fi

@@ -1,0 +1,150 @@
+name: probe-action-sha
+
+# Can a step, at runtime, learn the exact commit SHA of an action the runner
+# downloaded for this job - when the workflow pinned that action by a MUTABLE
+# ref (a tag) rather than by SHA?
+#
+# The runner knows. It receives a ResolvedSha from the Actions service during
+# "Getting action download info" and uses it to fetch the tarball. The question
+# is whether any of that reaches a step. Four candidate channels, probed in
+# order of how much we'd like them to work:
+#
+#   1. GITHUB_ACTION_* env vars. Set only for the step executing an action, and
+#      they carry the ref AS WRITTEN (v4), not the resolution. Job `identity`
+#      tests this from inside a composite action, at a tag and at a SHA, to see
+#      whether GITHUB_ACTION_REF ever holds a resolved SHA.
+#
+#   2. _actions on disk. The extract path is _actions/<owner>/<repo>/<ref>/,
+#      again the ref as written. GitHub's codeload tarball has a root directory
+#      named <owner>-<repo>-<sha>, but the runner strips it during extract - so
+#      the SHA may or may not survive anywhere under _actions. Also dumps the
+#      `.completed` marker files the runner writes beside each extract.
+#
+#   3. The runner's own diagnostic log. The ResolvedSha trace lands in
+#      _diag/Worker_*.log, which is written live and is therefore readable by a
+#      step in the same job. Undocumented and version-dependent, so the probe
+#      searches for the file rather than assuming a path.
+#
+#   4. Content verification - the only channel that does not require GitHub to
+#      volunteer anything. Resolve the tag to a SHA via the API, ask for that
+#      commit's tree SHA, then recompute the tree SHA from the extracted files
+#      with `git write-tree`. Equality proves the bytes on disk ARE that commit,
+#      independent of any log line. This also catches the case channels 1-3
+#      cannot: a tag that moved between the runner's download and our API call.
+#
+# Every job keeps going on failure so one dead channel does not hide the others.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/action-sha]
+
+jobs:
+  # Channels 2, 3 and 4. actions/checkout@v4 is the subject: a mutable tag whose
+  # resolution is not knowable from the workflow text.
+  runtime-channels:
+    runs-on: ubuntu-latest
+    env:
+      # Asking the runner for verbose tracing. ACTIONS_STEP_DEBUG is normally
+      # supplied as a secret/variable; setting it here tests whether plain job
+      # env is enough to widen what gets logged.
+      ACTIONS_STEP_DEBUG: true
+      ACTIONS_RUNNER_DEBUG: true
+    steps:
+      # The subject of the probe. Pinned by tag on purpose.
+      - uses: actions/checkout@v4
+
+      - name: Probe every channel
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECT_REPO: actions/checkout
+          SUBJECT_REF: v4
+        run: |
+          set -uo pipefail
+          actions_root="$(dirname "$RUNNER_WORKSPACE")/_actions"
+
+          echo "::group::Channel 1 - GITHUB_ACTION_* in a plain run step"
+          # Expected empty: a `run:` step is not an action. Recorded so the
+          # contrast with the `identity` job is on the record.
+          for k in GITHUB_ACTION GITHUB_ACTION_REPOSITORY GITHUB_ACTION_REF GITHUB_ACTION_PATH; do
+            printf '  %-28s = %s\n' "$k" "${!k:-<UNSET>}"
+          done
+          echo "::endgroup::"
+
+          echo "::group::Channel 2 - _actions on disk"
+          echo "  actions_root = $actions_root"
+          find "$actions_root" -maxdepth 3 2>/dev/null | sed 's/^/  /'
+          echo "  --- .completed markers (content, if any) ---"
+          while IFS= read -r m; do
+            printf '  %s (%s bytes): ' "$m" "$(wc -c <"$m" | tr -d ' ')"
+            cat "$m"; echo
+          done < <(find "$actions_root" -name '*.completed' 2>/dev/null)
+          echo "  --- any 40-hex string anywhere under _actions paths ---"
+          find "$actions_root" 2>/dev/null | grep -Eo '[0-9a-f]{40}' | sort -u | sed 's/^/  /' || echo "  (none)"
+          echo "::endgroup::"
+
+          echo "::group::Channel 3 - runner diagnostic log"
+          # Hunt rather than assume: hosted and self-hosted runners differ.
+          mapfile -t diags < <(find / -name 'Worker_*.log' -o -name 'Runner_*.log' 2>/dev/null | head -20)
+          if [ "${#diags[@]}" -eq 0 ]; then
+            echo "  no Worker_*/Runner_* log found on this runner"
+          else
+            for d in "${diags[@]}"; do
+              echo "  --- $d ---"
+              grep -aoE "Download action repository '[^']+'( \(SHA:[0-9a-f]{40}\))?" "$d" | sed 's/^/    /' || true
+              grep -aoE '"?[Rr]esolvedSha"?[":= ]+[0-9a-f]{40}' "$d" | sed 's/^/    /' || true
+            done
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Channel 4 - verify extracted bytes against a commit tree"
+          dir="$actions_root/${SUBJECT_REPO}/${SUBJECT_REF}"
+          if [ ! -d "$dir" ]; then
+            echo "  extract dir absent: $dir"
+          else
+            # What the tag points at NOW. May differ from download time; the
+            # tree comparison below is what detects that.
+            sha=$(gh api "repos/${SUBJECT_REPO}/commits/${SUBJECT_REF}" --jq .sha)
+            want=$(gh api "repos/${SUBJECT_REPO}/git/commits/${sha}" --jq .tree.sha)
+
+            # cp -a, not cp -r: exec bits and symlinks are part of a git tree,
+            # and losing them produces a false mismatch.
+            tmp=$(mktemp -d)
+            cp -a "$dir/." "$tmp/"
+            rm -rf "$tmp/.git"
+            git -C "$tmp" init -q
+            git -C "$tmp" add -A
+            got=$(git -C "$tmp" write-tree)
+
+            echo "  resolved ${SUBJECT_REPO}@${SUBJECT_REF} -> $sha"
+            echo "  commit tree (API)   = $want"
+            echo "  on-disk tree (calc) = $got"
+            if [ "$want" = "$got" ]; then
+              echo "  VERDICT: MATCH - extracted bytes are commit $sha"
+            else
+              # Expected causes: .gitattributes export-ignore/export-subst,
+              # submodules, or the tag moved. Walk the tag's recent history and
+              # see whether some other commit's tree matches what is on disk.
+              echo "  VERDICT: MISMATCH - searching recent commits for tree $got"
+              gh api "repos/${SUBJECT_REPO}/commits?sha=${SUBJECT_REF}&per_page=30" \
+                --jq '.[] | .sha + " " + .commit.tree.sha' |
+                while read -r c t; do
+                  [ "$t" = "$got" ] && echo "  on-disk tree belongs to commit $c"
+                done
+            fi
+          fi
+          echo "::endgroup::"
+
+  # Channel 1 in its only valid habitat: a step that IS an action, referenced
+  # REMOTELY so the GITHUB_ACTION_* vars are actually populated. The probe action
+  # lives in this same repo, but `owner/repo/path@ref` makes the runner treat it
+  # as third-party and extract it into _actions - which is the case under test.
+  #
+  # Mutable ref: the caller wrote a tag, so the commit is not knowable from the
+  # workflow text. This is the interesting job.
+  identity-at-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dattathallam/demo-workflows/.github/actions/action-sha-probe@probe-sha-v1
