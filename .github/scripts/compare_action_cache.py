@@ -75,6 +75,10 @@ def walk_refs(directory, ref, owner, repo, found):
 
 def curl(url, out=None, api=False):
     cmd = ["curl", "-sSfL", "--retry", "2"]
+    if os.name == "nt":
+        # Windows' curl.exe (schannel) fails outright when the revocation server is unreachable,
+        # which hosted Windows runners hit (CRYPT_E_REVOCATION_OFFLINE in run 36568845889).
+        cmd.append("--ssl-revoke-best-effort")
     token = os.environ.get("GH_TOKEN")
     if token:
         cmd += ["-H", f"Authorization: Bearer {token}"]
