@@ -1,14 +1,14 @@
 name: bench-content-compare
 
 # How long does deciding "is the runner's copy of an action the same content as a fresh download"
-# take on a GitHub-hosted runner, and which comparison strategy should curate-gh-actions use?
+# take on each runner kind, and which comparison strategy should curate-gh-actions use?
 #
 # The steps under "Actions under test" never run (if: false), but the runner still downloads every
 # action a job references during "Set up job", so they land in _actions like any job's actions.
 # .github/bench/cmpbench then times, per action: two downloads of the same ref from GitHub's tarball
 # endpoint, `tar -xzf` for reference, and four end-to-end comparison strategies. It runs once with
-# a warm page cache (the realistic case - the runner wrote _actions minutes earlier) and once with
-# the cache dropped before every strategy (worst case).
+# a warm page cache (the realistic case - the runner wrote _actions minutes earlier) and, where the
+# OS allows dropping it without a password, once with the cache dropped before every strategy.
 
 on:
   workflow_dispatch:
@@ -18,9 +18,30 @@ on:
       - .github/bench/**
       - .github/workflows/bench-content-compare.yml
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            runner: ubuntu-latest
+            cold: true
+          - name: windows
+            runner: windows-latest
+            cold: false
+          - name: macos
+            runner: macos-latest
+            cold: true
+          - name: self-hosted-macos
+            runner: [self-hosted, cmp-probe]
+            cold: false
+    name: bench (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,12 +62,13 @@ jobs:
 
       - name: Runner shape
         run: |
-          nproc; free -h; df -h "$RUNNER_WORKSPACE" /tmp; go version
-          du -sh "$(dirname "$RUNNER_WORKSPACE")/_actions"/*/* 2>/dev/null
+          echo "os=$RUNNER_OS arch=$RUNNER_ARCH env=$RUNNER_ENVIRONMENT name=$RUNNER_NAME"
+          go version
+          du -sh "$(dirname "$RUNNER_WORKSPACE")/_actions"/*/* 2>/dev/null || true
 
       - name: Build cmpbench
         working-directory: .github/bench/cmpbench
-        run: go build -o "$RUNNER_TEMP/cmpbench" .
+        run: go build -o "$RUNNER_TEMP/cmpbench${{ runner.os == 'Windows' && '.exe' || '' }}" .
 
       - name: Bench - warm page cache
         env:
@@ -54,11 +76,12 @@ jobs:
         run: '"$RUNNER_TEMP/cmpbench" -out "$RUNNER_TEMP/warm.json"'
 
       - name: Bench - cold page cache before every strategy
+        if: matrix.cold
         env:
           GH_TOKEN: ${{ github.token }}
         run: '"$RUNNER_TEMP/cmpbench" -cold -out "$RUNNER_TEMP/cold.json"'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cmpbench-results
+          name: cmpbench-results-${{ matrix.name }}
           path: ${{ runner.temp }}/*.json

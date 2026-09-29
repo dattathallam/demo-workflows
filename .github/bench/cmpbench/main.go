@@ -71,7 +71,8 @@ func main() {
 	must(err)
 	defer os.RemoveAll(work)
 
-	fmt.Printf("cpus=%d cold=%v roots=%d\n", runtime.NumCPU(), *cold, len(roots))
+	fmt.Printf("os=%s/%s runner=%s (%s) cpus=%d cold=%v roots=%d\n", runtime.GOOS, runtime.GOARCH,
+		os.Getenv("RUNNER_NAME"), os.Getenv("RUNNER_ENVIRONMENT"), runtime.NumCPU(), *cold, len(roots))
 	var results []timing
 	for i, r := range roots {
 		t := timing{Action: fmt.Sprintf("%s/%s@%s", r.owner, r.repo, r.ref), Strategies: map[string]outcome{}}
@@ -313,7 +314,10 @@ func extract(archive, dest string) error {
 				return err
 			}
 			if err := os.Symlink(h.Linkname, target); err != nil {
-				return err
+				// Windows without the symlink privilege: keep the link path as content, as a zip would.
+				if err := os.WriteFile(target, []byte(h.Linkname), 0o644); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -495,9 +499,10 @@ func streamCompare(archive, runner string) (bool, error) {
 				continue
 			}
 			ok, err := sameByBytes(filepath.Join(filepath.Dir(p), h.Linkname), p)
-			if err != nil {
-				identical = false
-				continue
+			if err != nil || !ok {
+				// A zip extracted by .NET on Windows leaves the link path as the file's content.
+				content, readErr := os.ReadFile(p)
+				ok = readErr == nil && string(content) == h.Linkname
 			}
 			identical = identical && ok
 		}
@@ -505,7 +510,14 @@ func streamCompare(archive, runner string) (bool, error) {
 }
 
 func dropCaches() {
-	must(exec.Command("sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches").Run())
+	switch runtime.GOOS {
+	case "linux":
+		must(exec.Command("sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches").Run())
+	case "darwin":
+		must(exec.Command("sudo", "-n", "purge").Run())
+	default:
+		must(fmt.Errorf("-cold is not supported on %s", runtime.GOOS))
+	}
 }
 
 func ms(d time.Duration) string {
@@ -531,7 +543,8 @@ func writeSummary(results []timing, cold bool) {
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o644)
 	must(err)
 	defer f.Close()
-	fmt.Fprintf(f, "### cmpbench (cold=%v, cpus=%d), times in ms\n\n", cold, runtime.NumCPU())
+	fmt.Fprintf(f, "### cmpbench %s/%s %s (cold=%v, cpus=%d), times in ms\n\n", runtime.GOOS, runtime.GOARCH,
+		os.Getenv("RUNNER_ENVIRONMENT"), cold, runtime.NumCPU())
 	fmt.Fprintf(f, "| Action | Files | Archive MB | Download 1 | Download 2 | tar -xzf | %s | pax comment |\n", strings.Join(strategyOrder, " | "))
 	fmt.Fprintf(f, "|---|---|---|---|---|---|%s---|\n", strings.Repeat("---|", len(strategyOrder)))
 	for _, t := range results {
