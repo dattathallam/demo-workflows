@@ -1,0 +1,64 @@
+name: bench-content-compare
+
+# How long does deciding "is the runner's copy of an action the same content as a fresh download"
+# take on a GitHub-hosted runner, and which comparison strategy should curate-gh-actions use?
+#
+# The steps under "Actions under test" never run (if: false), but the runner still downloads every
+# action a job references during "Set up job", so they land in _actions like any job's actions.
+# .github/bench/cmpbench then times, per action: two downloads of the same ref from GitHub's tarball
+# endpoint, `tar -xzf` for reference, and four end-to-end comparison strategies. It runs once with
+# a warm page cache (the realistic case - the runner wrote _actions minutes earlier) and once with
+# the cache dropped before every strategy (worst case).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/content-compare]
+    paths:
+      - .github/bench/**
+      - .github/workflows/bench-content-compare.yml
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Actions under test - downloaded at job setup, never executed.
+      - if: false
+        uses: actions/setup-node@v4
+      - if: false
+        uses: actions/upload-artifact@v4
+      - if: false
+        uses: aws-actions/configure-aws-credentials@v4
+      - if: false
+        uses: docker/build-push-action@v6
+      - if: false
+        uses: github/codeql-action/init@v3
+      # Worst case: commits node_modules, ~23k files, ~330 MB extracted.
+      - if: false
+        uses: github/codeql-action/init@v2
+
+      - name: Runner shape
+        run: |
+          nproc; free -h; df -h "$RUNNER_WORKSPACE" /tmp; go version
+          du -sh "$(dirname "$RUNNER_WORKSPACE")/_actions"/*/* 2>/dev/null
+
+      - name: Build cmpbench
+        working-directory: .github/bench/cmpbench
+        run: go build -o "$RUNNER_TEMP/cmpbench" .
+
+      - name: Bench - warm page cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/cmpbench" -out "$RUNNER_TEMP/warm.json"'
+
+      - name: Bench - cold page cache before every strategy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/cmpbench" -cold -out "$RUNNER_TEMP/cold.json"'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cmpbench-results
+          path: ${{ runner.temp }}/*.json

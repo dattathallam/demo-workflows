@@ -21,8 +21,6 @@ name: probe-content-compare
 
 on:
   workflow_dispatch:
-  push:
-    branches: [probe/content-compare]
 
 env:
   FIXTURE_A: 09ef760dcd1025723fc91e55e22bc59fdec35acb
