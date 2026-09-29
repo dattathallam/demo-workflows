@@ -1,0 +1,127 @@
+name: probe-content-compare
+
+# Can a step tell whether an action the runner downloaded at job setup is the same content that a
+# fresh download of the same ref serves now? And when it is not, which stages of the action run the
+# runner's copy and which run a swapped-in copy?
+#
+# .github/scripts/compare_action_cache.py walks _actions the way curate-gh-actions discovers it,
+# downloads each root's ref from GitHub's tarball endpoint, extracts it like the runner does, and
+# compares archive -> runner (extras on the runner are listed, not counted).
+#
+# Fixture actions live on the orphan branch cmp-fixtures, which holds no workflows:
+#   version A = 09ef760dcd1025723fc91e55e22bc59fdec35acb  (tag cmp-stable, never moves)
+#   version B = bb84f1b6e65d757857979c1235ed5c201083f32c  (every VERSION is B; node-nopre gains a post)
+# Each fixture prints "CMP-RESULT action=... stage=... version=..." from the content it ran.
+#
+# Jobs run in sequence so no job's setup sees the tag in another job's state:
+#   reset-moving-tag  cmp-moving -> A
+#   same-version      public and fixture actions whose ref does not move: expect IDENTICAL
+#   moving-tag        runner downloads cmp-moving (A), a step moves it to B, compare expects
+#                     DIFFERENT, swap installs B, then every fixture stage reports what it ran
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/content-compare]
+
+env:
+  FIXTURE_A: 09ef760dcd1025723fc91e55e22bc59fdec35acb
+  FIXTURE_B: bb84f1b6e65d757857979c1235ed5c201083f32c
+
+jobs:
+  reset-moving-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Point cmp-moving at version A
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-moving" -f sha="$FIXTURE_A" -F force=true --jq .object.sha
+
+  same-version:
+    needs: reset-moving-tag
+    runs-on: ubuntu-latest
+    steps:
+      # node, pre + main + post
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+      # node, main + post, mutable major tag
+      - uses: actions/checkout@v4
+      # node, pinned by full SHA (v4.2.2)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: sha-pinned-checkout
+
+      - name: Compare before any main step ran (only pre steps have)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/compare_action_cache.py compare --label same-version-before-mains
+
+      # node, main + post
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # docker, image: Dockerfile, branch ref
+      - uses: actions/hello-world-docker-action@main
+        with:
+          who-to-greet: probe
+      # composite, exact tag
+      - uses: ludeeus/action-shellcheck@2.0.0
+        continue-on-error: true
+        with:
+          scandir: ./.github/scripts
+      # composite that nests a remote action (actions/upload-artifact)
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .github/scripts
+      # fixtures at the stable tag: node with pre, docker with pre-entrypoint, composite nesting node
+      - uses: dattathallam/demo-workflows/node-pre@cmp-stable
+      - uses: dattathallam/demo-workflows/docker-pre@cmp-stable
+      - uses: dattathallam/demo-workflows/composite@cmp-stable
+
+      - name: Compare after every main step ran
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/compare_action_cache.py compare --label same-version-after-mains
+
+  moving-tag:
+    needs: same-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Move cmp-moving to version B after the runner downloaded A
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-moving" -f sha="$FIXTURE_B" -F force=true --jq .object.sha
+          for i in $(seq 1 30); do
+            now=$(gh api "repos/${{ github.repository }}/commits/cmp-moving" --jq .sha)
+            [ "$now" = "$FIXTURE_B" ] && { echo "cmp-moving resolves to B after ${i} poll(s)"; exit 0; }
+            sleep 2
+          done
+          echo "cmp-moving still resolves to $now"; exit 1
+
+      - name: Compare - the runner holds A, the tag now serves B
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/compare_action_cache.py compare --label moving-before-swap
+
+      - name: Swap every DIFFERENT root for the served content (what curate-gh-actions does)
+        run: python3 .github/scripts/compare_action_cache.py swap
+
+      - name: Compare after the swap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/compare_action_cache.py compare --label moving-after-swap
+
+      - uses: dattathallam/demo-workflows/node-pre@cmp-moving
+      - uses: dattathallam/demo-workflows/node-nopre@cmp-moving
+      - uses: dattathallam/demo-workflows/docker-pre@cmp-moving
+      - uses: dattathallam/demo-workflows/composite@cmp-moving
