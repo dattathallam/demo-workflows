@@ -1,0 +1,8 @@
+name: cmp-composite
+description: Composite action - a run step printing its VERSION, then a nested remote node action.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "CMP-RESULT action=composite stage=main version=$(cat "$GITHUB_ACTION_PATH/VERSION") dir=$GITHUB_ACTION_PATH"
+    - uses: dattathallam/demo-workflows/node-nopre@cmp-moving

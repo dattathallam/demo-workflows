@@ -1,0 +1,7 @@
+name: cmp-docker-pre
+description: Dockerfile action with a pre-entrypoint; each stage prints the VERSION baked into the image.
+runs:
+  using: docker
+  image: Dockerfile
+  pre-entrypoint: /pre.sh
+  entrypoint: /main.sh

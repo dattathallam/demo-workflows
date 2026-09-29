@@ -1,0 +1,5 @@
+name: cmp-node-nopre
+description: Node action with main only; prints the VERSION it was loaded from.
+runs:
+  using: node20
+  main: main.js
