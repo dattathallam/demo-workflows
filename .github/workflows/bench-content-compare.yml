@@ -44,6 +44,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      # The hosted macOS image ships without Go.
+      - uses: actions/setup-go@v5
+        if: runner.os == 'macOS' && runner.environment == 'github-hosted'
+        with:
+          go-version: stable
+          cache: false
 
       # Actions under test - downloaded at job setup, never executed.
       - if: false

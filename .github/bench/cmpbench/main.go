@@ -323,11 +323,20 @@ func extract(archive, dest string) error {
 	}
 }
 
+// timeTarXzf is a reference point only, so a failure is reported as -1 rather than stopping the run.
 func timeTarXzf(archive, dest string) time.Duration {
 	must(os.MkdirAll(dest, 0o755))
 	defer os.RemoveAll(dest)
+	tarBin := "tar"
+	if runtime.GOOS == "windows" {
+		// Under Git Bash, PATH finds GNU tar first, which reads "D:\..." as host "D".
+		tarBin = filepath.Join(os.Getenv("SystemRoot"), "System32", "tar.exe")
+	}
 	start := time.Now()
-	must(exec.Command("tar", "-xzf", archive, "-C", dest).Run())
+	if out, err := exec.Command(tarBin, "-xzf", archive, "-C", dest).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "tar -xzf %s: %v: %s\n", archive, err, out)
+		return -1
+	}
 	return time.Since(start)
 }
 
