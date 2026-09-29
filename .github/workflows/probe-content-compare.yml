@@ -101,12 +101,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-moving" -f sha="$FIXTURE_B" -F force=true --jq .object.sha
-          for i in $(seq 1 30); do
-            now=$(gh api "repos/${{ github.repository }}/commits/cmp-moving" --jq .sha)
-            [ "$now" = "$FIXTURE_B" ] && { echo "cmp-moving resolves to B after ${i} poll(s)"; exit 0; }
-            sleep 2
+          # The tarball endpoint caches a tag's target for a while after the commits API already
+          # reports the move (measured in run 36558887915), so wait on the tarball itself.
+          start=$SECONDS
+          for i in $(seq 1 60); do
+            top=$(curl -sSfL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/tarball/cmp-moving" | tar -tzf - | head -1)
+            if [[ "$top" == *"${FIXTURE_B:0:7}"* ]]; then
+              echo "tarball of cmp-moving serves B ($top) after $((SECONDS - start))s, ${i} poll(s)"; exit 0
+            fi
+            echo "poll $i: tarball of cmp-moving still serves $top"
+            sleep 10
           done
-          echo "cmp-moving still resolves to $now"; exit 1
+          exit 1
 
       - name: Compare - the runner holds A, the tag now serves B
         env:
