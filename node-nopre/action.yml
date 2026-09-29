@@ -1,5 +1,6 @@
 name: cmp-node-nopre
-description: Node action with main only; prints the VERSION it was loaded from.
+description: Node action with main only at version A; version B adds a post step.
 runs:
   using: node20
   main: main.js
+  post: post.js
