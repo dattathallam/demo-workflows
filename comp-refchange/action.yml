@@ -1,0 +1,8 @@
+name: cmp-comp-refchange
+description: Composite fixture for nested-action changes between versions (this is version C).
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "CMP-RESULT action=comp-refchange stage=main step=run version=$(cat "$GITHUB_ACTION_PATH/VERSION")"
+    - uses: dattathallam/demo-workflows/node-nopre@cmp-nested-1
