@@ -1,8 +1,7 @@
 name: cmp-comp-dropstep
-description: Composite fixture for nested-action changes between versions (this is version C).
+description: Composite fixture for nested-action changes between versions (this is version D).
 runs:
   using: composite
   steps:
     - shell: bash
       run: echo "CMP-RESULT action=comp-dropstep stage=main step=run version=$(cat "$GITHUB_ACTION_PATH/VERSION")"
-    - uses: dattathallam/demo-workflows/node-pre@cmp-comp-moving
