@@ -20,6 +20,10 @@ name: probe-composite-nested
 
 on:
   workflow_dispatch:
+  # A workflow only on this branch cannot be dispatched, so a change to it runs it instead.
+  push:
+    branches: [probe/content-compare]
+    paths: [.github/workflows/probe-composite-nested.yml]
 
 env:
   FIXTURE_C: d147fa2772846dae94d9b55bbe52ffba7a37eb6d
