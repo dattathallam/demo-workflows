@@ -1,0 +1,118 @@
+name: probe-composite-nested
+
+# When curate-gh-actions swaps a composite action's content for a version whose own steps differ,
+# what does the runner do with the composite's nested actions?
+#
+# The runner resolves and downloads every nested action during "Set up job", from the composite's
+# action.yml as it was then, and registers nested pre/post steps and step ids at that point. At
+# run time it re-parses action.yml from disk, maps the re-parsed steps onto the ids from setup by
+# position, and never downloads anything for a remote composite. Each fixture on cmp-fixtures
+# changes one thing between version C (d147fa2) and version D (8a51c9e):
+#
+#   comp-refchange          nested ref -> cmp-nested-2, never downloaded by this job
+#   comp-refchange-present  nested ref -> cmp-comp-moving, already on disk (the composite's own root)
+#   comp-addstep            one step more; the new step is node-pre, which has a pre
+#   comp-dropstep           the node-pre step (whose pre ran at job start) is removed
+#   comp-reorder            node-pre moves from step 2 to step 1
+#
+# Every fixture prints CMP-RESULT lines: the composite's run step its VERSION (C or D), the nested
+# node actions their stage and the directory they were loaded from.
+
+on:
+  workflow_dispatch:
+
+env:
+  FIXTURE_C: d147fa2772846dae94d9b55bbe52ffba7a37eb6d
+  FIXTURE_D: 8a51c9e2f8e47504f2b0def46c77ce98a21b8857
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  reset-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Point cmp-comp-moving at version C
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-comp-moving" -f sha="$FIXTURE_C" -F force=true --jq .object.sha
+
+  # Baseline: every composite at C, no swap.
+  control:
+    needs: reset-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: What the runner downloaded at setup
+        run: find "$(dirname "$RUNNER_WORKSPACE")/_actions" -maxdepth 3 -mindepth 3 | sort
+      - uses: dattathallam/demo-workflows/comp-refchange@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-refchange-present@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-addstep@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-dropstep@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-reorder@cmp-comp-moving
+        continue-on-error: true
+
+  swapped:
+    needs: control
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What the runner downloaded at setup
+        run: find "$(dirname "$RUNNER_WORKSPACE")/_actions" -maxdepth 3 -mindepth 3 | sort
+
+      - name: Move cmp-comp-moving to version D after the runner downloaded C
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-comp-moving" -f sha="$FIXTURE_D" -F force=true --jq .object.sha
+          archive="cmp-comp-moving-poll.tar.gz"
+          start=$SECONDS
+          for i in $(seq 1 60); do
+            curl -sSfL -o "$archive" -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/tarball/cmp-comp-moving"
+            top=$(tar -tzf "$archive" | sed -n 1p)
+            if [[ "$top" == *"${FIXTURE_D:0:7}"* ]]; then
+              echo "tarball of cmp-comp-moving serves D ($top) after $((SECONDS - start))s"; exit 0
+            fi
+            echo "poll $i: tarball still serves $top"
+            sleep 10
+          done
+          exit 1
+
+      - name: Compare - the runner holds C, the tag now serves D
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/compare_action_cache.py compare --label composite-before-swap
+
+      - name: Swap every DIFFERENT root for the served content
+        run: python3 .github/scripts/compare_action_cache.py swap
+
+      - uses: dattathallam/demo-workflows/comp-refchange@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-refchange-present@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-addstep@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-dropstep@cmp-comp-moving
+        continue-on-error: true
+      - uses: dattathallam/demo-workflows/comp-reorder@cmp-comp-moving
+        continue-on-error: true
+
+      - name: What is on disk at the end
+        if: always()
+        run: find "$(dirname "$RUNNER_WORKSPACE")/_actions" -maxdepth 3 -mindepth 3 | sort
+
+      - name: Move cmp-comp-moving back to version C
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/cmp-comp-moving" -f sha="$FIXTURE_C" -F force=true --jq .object.sha
