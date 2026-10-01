@@ -1,0 +1,68 @@
+name: probe-state-store
+
+# Where does the runner keep an action's intra-action state (core.saveState / GITHUB_STATE), what is
+# handed to pre, main and post, and can anything outside the action change it?
+#
+# The fixture dattathallam/demo-workflows/state-probe@cmp-state prints, in every stage, the STATE_*
+# variables it received and every file in the runner's file-command folder, then saves:
+#   pre  -> fromPre=pre-value, shared=set-by-pre
+#   main -> shared=set-by-main, fromMain=main-value
+#   post -> fromPost=post-value
+# It is used twice (instances "first" and "second") to see whether state belongs to the step or to
+# the action. The run steps in between try every outside channel:
+#   - append to other steps' save_state_* files in the file-command folder
+#   - write to their own GITHUB_STATE
+#   - set STATE_* through GITHUB_ENV, and through a step's own env:
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/content-compare]
+    paths: [.github/workflows/probe-state-store.yml]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  state:
+    runs-on: ubuntu-latest
+    env:
+      DUMP: |
+        dir=$(dirname "$GITHUB_STATE")
+        echo "PROBE-RUN-STEP own GITHUB_STATE=$GITHUB_STATE"
+        for f in "$dir"/*; do
+          printf 'PROBE-RUN-STEP   file %s (%s bytes)' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"
+          [ -s "$f" ] && printf ': %s' "$(head -c 200 "$f" | tr '\n' '|')"; echo
+        done
+        for f in "$dir"/save_state_*; do
+          [ "$f" = "$GITHUB_STATE" ] && continue
+          echo "editedByRunStep=1" >> "$f" && echo "PROBE-RUN-STEP appended to another step's state file $(basename "$f")"
+        done
+    steps:
+      - name: Before main - dump, then try to change state
+        run: |
+          eval "$DUMP"
+          echo "fromRunStep=run-step-value" >> "$GITHUB_STATE"
+          echo "shared=set-by-run-step" >> "$GITHUB_STATE"
+          {
+            echo "STATE_shared=via-github-env"
+            echo "STATE_fromPre=via-github-env"
+            echo "STATE_onlyEnv=via-github-env"
+          } >> "$GITHUB_ENV"
+
+      - uses: dattathallam/demo-workflows/state-probe@cmp-state
+        env:
+          PROBE_INSTANCE: first
+          STATE_shared: via-step-env
+          STATE_stepEnvOnly: via-step-env
+
+      - name: After first main - dump, then try to change state
+        run: |
+          eval "$DUMP"
+          echo "afterMain=run-step-value" >> "$GITHUB_STATE"
+          echo "STATE_fromMain=via-github-env" >> "$GITHUB_ENV"
+
+      - uses: dattathallam/demo-workflows/state-probe@cmp-state
+        env:
+          PROBE_INSTANCE: second
