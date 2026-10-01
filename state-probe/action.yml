@@ -1,0 +1,7 @@
+name: cmp-state-probe
+description: Prints the intra-action state each stage receives and the runner's file-command files, then saves its own state.
+runs:
+  using: node20
+  pre: pre.js
+  main: main.js
+  post: post.js
