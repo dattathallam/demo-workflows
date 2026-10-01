@@ -1,0 +1,91 @@
+name: probe-pre-rerun
+
+# What happens when a job's first step replaces a third-party action with another version and runs
+# the new version's pre by hand?
+#
+# Each job pins one public action that has a pre step. By the time the first step runs, the runner
+# has downloaded the pinned version and already run its pre ("Pre Run ..." in the log). The first
+# step (.github/scripts/override_and_pre.sh) then replaces the action with another version, adds a
+# PROBE-MARKER line to each of the new version's pre/main/post scripts, and runs the new pre by hand.
+# The pinned `uses:` step and the job's post steps then show what the runner does with the swapped
+# content. PROBE-MARKER lines appear only for scripts of the replacing version.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/content-compare]
+    paths:
+      - .github/workflows/probe-pre-rerun.yml
+      - .github/scripts/override_and_pre.sh
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SCRIPT_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/scripts/override_and_pre.sh
+
+jobs:
+  # pre starts a monitoring agent; running a second pre starts a second agent setup.
+  harden-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Override harden-runner v2.19.1 with v2.21.1 and run its pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: curl -sSfL "$SCRIPT_URL" | bash -s -- step-security/harden-runner v2.19.1 v2.21.1 egress-policy=audit
+
+      - uses: step-security/harden-runner@v2.19.1
+        with:
+          egress-policy: audit
+
+      - name: Observe
+        if: always()
+        run: |
+          ps -eo pid,user,etime,cmd | grep -iE 'agent|harden|stepsecurity' | grep -v grep || echo "no agent process found"
+          sudo systemctl list-units --all --no-pager 2>/dev/null | grep -iE 'agent|harden|stepsecurity' || true
+          ls -la "$(dirname "$RUNNER_WORKSPACE")/_actions/step-security/harden-runner/"
+
+  # pre runs a user command given as the `pre` input.
+  actions-post-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Override actions-post-run v1.0.0 with v1.0.2 and run its pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -sSfL "$SCRIPT_URL" | bash -s -- shogo82148/actions-post-run v1.0.0 v1.0.2
+          "run=echo PROBE-COMMAND manual-run" "pre=echo PROBE-COMMAND manual-pre" "post=echo PROBE-COMMAND manual-post"
+
+      - uses: shogo82148/actions-post-run@v1.0.0
+        with:
+          pre: echo "PROBE-COMMAND pre (registered by the runner)"
+          run: echo "PROBE-COMMAND main"
+          post: echo "PROBE-COMMAND post"
+
+      - name: Observe
+        if: always()
+        run: ls -la "$(dirname "$RUNNER_WORKSPACE")/_actions/shogo82148/actions-post-run/"
+
+  # Several input defaults are expressions (toJSON(github), ...); the step passes evaluated values.
+  wretry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Override wretry.action v3.7.2_js_action with v3.8.0_js_action and run its pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRE_INPUT_GITHUB_CONTEXT: ${{ toJSON(github) }}
+          PRE_INPUT_JOB_CONTEXT: ${{ toJSON(job) }}
+          PRE_INPUT_MATRIX_CONTEXT: ${{ toJSON(matrix) }}
+        run: >-
+          curl -sSfL "$SCRIPT_URL" | bash -s -- Wandalen/wretry.action v3.7.2_js_action v3.8.0_js_action
+          "command=echo PROBE-COMMAND wretry-manual" "attempt_limit=1"
+
+      - uses: Wandalen/wretry.action@v3.7.2_js_action
+        with:
+          command: echo "PROBE-COMMAND wretry main"
+          attempt_limit: 1
+
+      - name: Observe
+        if: always()
+        run: ls -la "$(dirname "$RUNNER_WORKSPACE")/_actions/Wandalen/wretry.action/"
